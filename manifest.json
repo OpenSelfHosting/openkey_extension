@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "name": "OpenKey",
+  "version": "0.1.4",
+  "description": "Self-hosted end-to-end encrypted password manager autofill",
+  "homepage_url": "https://openselfhosting.com",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "contextMenus",
+    "nativeMessaging",
+    "alarms",
+    "clipboardWrite",
+    "clipboardRead"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "OpenKey",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/passkey/content-bridge.ts"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/index.ts"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/passkey/page-script.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "commands": {
+    "fill-password": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Fill login with OpenKey"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "openkey@openselfhosting.local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

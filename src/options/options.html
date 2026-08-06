@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>OpenKey Options</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --seed: #1b6b4a;
+        --bg: #f4f7f5;
+        --surface: #ffffff;
+        --text: #161d19;
+        --muted: #55635c;
+        --outline: #c5d0c9;
+        --primary: #1b6b4a;
+        --on-primary: #fff;
+        --ok: #0f6b3d;
+        --err: #ba1a1a;
+        --font: "Segoe UI", "SF Pro Text", system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1512;
+          --surface: #1a221e;
+          --text: #e2e8e4;
+          --muted: #a3b0a9;
+          --outline: #3a4741;
+          --primary: #8cd5ae;
+          --on-primary: #003822;
+          --ok: #8cd5ae;
+          --err: #ffb4ab;
+        }
+      }
+      body {
+        font-family: var(--font);
+        max-width: 640px;
+        margin: 0 auto;
+        padding: 2rem 1.25rem 3rem;
+        line-height: 1.45;
+        background:
+          radial-gradient(ellipse 80% 50% at 10% -10%, rgba(27, 107, 74, 0.12), transparent),
+          var(--bg);
+        color: var(--text);
+      }
+      h1 {
+        font-size: 1.5rem;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        margin: 0 0 0.35rem;
+      }
+      h1 .key {
+        color: var(--primary);
+      }
+      .lead {
+        color: var(--muted);
+        margin: 0 0 1.25rem;
+      }
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin: 0 0 1.5rem;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.35rem 0.75rem;
+        border-radius: 999px;
+        border: 1px solid var(--outline);
+        background: var(--surface);
+        font-size: 0.8rem;
+        font-weight: 650;
+      }
+      .pill.on {
+        border-color: color-mix(in srgb, var(--ok) 45%, var(--outline));
+        color: var(--ok);
+      }
+      .pill.off {
+        color: var(--muted);
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--outline);
+        border-radius: 16px;
+        padding: 1rem 1.1rem 1.15rem;
+        margin-bottom: 1rem;
+      }
+      h2 {
+        font-size: 1.05rem;
+        margin: 0 0 0.45rem;
+      }
+      label {
+        display: block;
+        margin: 0.85rem 0;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      input[type="text"],
+      input[type="url"],
+      input[type="number"],
+      textarea {
+        width: 100%;
+        margin-top: 0.35rem;
+        padding: 0.65rem 0.75rem;
+        box-sizing: border-box;
+        border: 1px solid var(--outline);
+        border-radius: 12px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+      }
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .check input {
+        width: auto;
+        margin: 0;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+      button {
+        margin: 0;
+        padding: 0.7rem 1.1rem;
+        border: none;
+        border-radius: 12px;
+        background: var(--primary);
+        color: var(--on-primary);
+        font-weight: 700;
+        cursor: pointer;
+        font: inherit;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--outline);
+      }
+      .ok {
+        color: var(--ok);
+      }
+      .err {
+        color: var(--err);
+      }
+      .id-box {
+        background: var(--bg);
+        border: 1px solid var(--outline);
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.85rem;
+        word-break: break-all;
+      }
+      code {
+        font-size: 0.9em;
+      }
+      #msg {
+        min-height: 1.4em;
+        margin-top: 0.75rem;
+      }
+      .hint {
+        font-size: 0.85rem;
+        color: var(--muted);
+        margin: 0.35rem 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1><span>Open</span><span class="key">Key</span> Options</h1>
+    <p class="lead">
+      Connect a self-hosted server or the unlocked desktop app. The toolbar popup
+      is where you browse and fill the vault.
+    </p>
+
+    <div class="status" id="statusRow" aria-live="polite">
+      <span class="pill off" id="unlockPill">Vault locked</span>
+      <span class="pill off" id="modePill">Mode —</span>
+    </div>
+
+    <div class="card">
+      <h2>Connection</h2>
+      <label>
+        Self-hosted server URL
+        <input id="serverUrl" type="url" placeholder="http://localhost:8000" />
+      </label>
+      <label>
+        Auto-lock (minutes)
+        <input id="lockMinutes" type="number" min="1" max="120" />
+      </label>
+      <label class="check">
+        <input id="preferNative" type="checkbox" />
+        Prefer desktop bridge for saves (Use desktop app always works)
+      </label>
+      <div class="actions">
+        <button id="save" type="button">Save</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Chrome extension ID</h2>
+      <p class="hint">
+        Paste into the OpenKey desktop app:
+        <strong>Settings → Browser extension</strong>, then tap Connect (keep the
+        vault unlocked).
+      </p>
+      <div class="id-box" id="extensionId">…</div>
+      <div class="actions">
+        <button id="copyId" type="button" class="secondary">Copy ID</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Link vault metadata (optional)</h2>
+      <p class="hint">
+        Normally unlock with email and master password — the extension fetches
+        salt via <code>/auth/prelogin</code>. Paste from the app (Settings →
+        Browser extension → Copy offline vault link) only for offline/air-gapped
+        bootstrap.
+      </p>
+      <label>Email <input id="email" type="text" /></label>
+      <label>Salt (base64url) <input id="salt" type="text" /></label>
+      <label>Wrapped vault key <textarea id="wrapped" rows="3"></textarea></label>
+      <div class="actions">
+        <button id="link" type="button" class="secondary">Link vault metadata</button>
+      </div>
+    </div>
+
+    <p id="msg"></p>
+    <script type="module" src="./options.ts"></script>
+  </body>
+</html>

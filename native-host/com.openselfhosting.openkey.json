@@ -1,0 +1,10 @@
+{
+  "name": "com.openselfhosting.openkey",
+  "description": "OpenKey native messaging host",
+  "path": "OPENKEY_NATIVE_HOST_PATH",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://EXTENSION_ID/",
+    "moz-extension://EXTENSION_ID/"
+  ]
+}
