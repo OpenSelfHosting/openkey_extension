@@ -4,7 +4,9 @@
   "path": "OPENKEY_NATIVE_HOST_PATH",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://EXTENSION_ID/",
-    "moz-extension://EXTENSION_ID/"
+    "chrome-extension://EXTENSION_ID/"
+  ],
+  "allowed_extensions": [
+    "openkey@openselfhosting.local"
   ]
 }

@@ -201,7 +201,11 @@ def main() -> None:
             write_message(forward(msg))
         except Exception:  # noqa: BLE001
             # Do not leak exception details to the extension.
-            write_message({"ok": False, "error": "Request failed"})
+            try:
+                write_message({"ok": False, "error": "Request failed"})
+            except Exception:  # noqa: BLE001
+                # stdout may already be broken (e.g. BrokenPipeError); exit cleanly.
+                break
 
 
 if __name__ == "__main__":
