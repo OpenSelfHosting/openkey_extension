@@ -24,6 +24,8 @@ jobs:
         run: npm run typecheck
       - name: Unit tests
         run: npm test
+      - name: Crypto interop
+        run: npm run test:interop
       - name: Passkey smoke
         run: npm run test:passkey
       - name: Build
