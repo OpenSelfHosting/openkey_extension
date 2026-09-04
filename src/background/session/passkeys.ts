@@ -26,6 +26,7 @@ import {
   updateStandaloneEntryFull,
 } from "./vault_write";
 import { getSession } from "./state";
+import { resolveIconForLogin } from "../../shared/favicon_icon";
 
 export type PasskeyPrepareCreateResult =
   | {
@@ -152,6 +153,13 @@ async function savePasskeyEntry(input: {
     urls: urlsFor(input.origin),
     passkey: input.passkey,
   };
+  const icon = await resolveIconForLogin({
+    title,
+    urls: entry.urls,
+    username,
+    pageUrl: input.origin,
+  });
+  if (icon) entry.icon = icon;
 
   // Prefer attaching to an existing login for same origin + username
   const matches = await entriesForOrigin(input.origin);

@@ -144,7 +144,7 @@ export function buildFaqHtml(icons: Record<string, string>): string {
     {
       icon: icons.sync,
       q: "What is “Use desktop app”?",
-      a: "That connects the extension to an unlocked OpenKey desktop app over native messaging. Fill, login save/delete, and passkeys go through the app — no master password in the browser. Sync, shares, orgs, folders, and some edits stay in the desktop app while you are connected this way.",
+      a: "That connects the extension to an unlocked OpenKey desktop app over native messaging. Fill, save, edit, and delete for logins, cards, crypto, secrets, and passkeys go through the app — no master password in the browser. Sync, shares, orgs, and vault folders stay in the desktop app while you are connected this way.",
     },
     {
       icon: icons.timer,
@@ -482,6 +482,7 @@ export function buildCardEditorHtml(
       ${field("Expiry", "edExpiry", draft.expiry ?? "", { placeholder: "MM/YY" })}
       ${field("CVC", "edCvc", draft.cvc ?? "", { type: "password" })}
       ${field("Brand", "edBrand", draft.brand ?? "", { placeholder: "visa, mastercard…" })}
+      ${field("Bank", "edBank", draft.bank ?? "", { placeholder: "issuer / folder" })}
       ${field("Notes", "edNotes", draft.notes ?? "", { rows: 2 })}
       <div class="detail-actions" style="margin-top:12px">
         <button type="button" class="btn-filled full" data-editor-save>${isNew ? "Create" : "Save"}</button>
@@ -501,6 +502,7 @@ export function buildCryptoEditorHtml(
       ${field("Address", "edAddress", draft.address ?? "")}
       ${field("Private key", "edPrivateKey", draft.privateKey ?? "", { rows: 2 })}
       ${field("Seed phrase", "edSeed", draft.seedPhrase ?? "", { rows: 2 })}
+      ${field("Folder", "edWalletFolder", draft.folder ?? "", { placeholder: "Cold storage…" })}
       ${field("Notes", "edNotes", draft.notes ?? "", { rows: 2 })}
       <div class="detail-actions" style="margin-top:12px">
         <button type="button" class="btn-filled full" data-editor-save>${isNew ? "Create" : "Save"}</button>
@@ -537,6 +539,7 @@ export function buildSecretEditorHtml(
       ${field("Public key", "edPublicKey", draft.publicKey ?? "", { rows: 2, placeholder: "SSH only" })}
       ${field("Secret / token / private key", "edSecret", draft.secret ?? "", { rows: 3 })}
       ${field("Passphrase", "edPassphrase", draft.passphrase ?? "", { type: "password" })}
+      ${field("Device", "edDevice", draft.device ?? "", { placeholder: "laptop, CI…" })}
       ${field("Notes", "edNotes", draft.notes ?? "", { rows: 2 })}
       <div class="detail-actions" style="margin-top:12px">
         <button type="button" class="btn-filled full" data-editor-save>${isNew ? "Create" : "Save"}</button>

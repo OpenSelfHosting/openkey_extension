@@ -3,7 +3,8 @@
  * Implementations live under ./session/*.
  */
 export { matchSecretsForOrigin } from "./session/mapping";
-export type { CaptureDecision } from "./session/vault_read";
+export type { CaptureDecision, VaultSnapshot } from "./session/vault_read";
+export type { CapturePersistResult } from "./session/vault_write";
 
 export {
   lock,
@@ -17,7 +18,11 @@ export {
   publishIdentityKeys,
 } from "./session/auth";
 
-export { scheduleAutoLock, syncActionBadge } from "./session/state";
+export {
+  scheduleAutoLock,
+  syncActionBadge,
+  exposeSessionToPages,
+} from "./session/state";
 
 export { syncNow, listEntryAttachments, downloadAttachment } from "./session/sync";
 
@@ -27,6 +32,8 @@ export {
   decryptLocalCards,
   decryptLocalCrypto,
   decryptLocalSecrets,
+  listDecryptedCollections,
+  listVaultSnapshot,
   secretsForOrigin,
   matchEntriesForOrigin,
   entriesForOrigin,
@@ -34,9 +41,9 @@ export {
 } from "./session/vault_read";
 
 export {
+  persistCapturedLogin,
   saveLogin,
   updateLogin,
-  listDecryptedCollections,
   upsertLoginEntry,
   upsertCardEntry,
   upsertCryptoEntry,

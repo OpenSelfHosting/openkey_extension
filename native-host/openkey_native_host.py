@@ -110,7 +110,11 @@ def with_auth(msg: dict, token: str | None) -> dict:
     return out
 
 
-MAX_FRAME = 2 * 1024 * 1024
+# Socket frames can be larger; Chrome/Firefox native messaging caps stdout at 1MB.
+SOCKET_MAX_FRAME = 2 * 1024 * 1024
+CHROME_MAX_FRAME = 1024 * 1024
+CONNECT_TIMEOUT = 2.5
+RECV_TIMEOUT = 60.0
 
 
 def read_message() -> dict | None:
@@ -118,7 +122,7 @@ def read_message() -> dict | None:
     if not raw_len or len(raw_len) < 4:
         return None
     (length,) = struct.unpack("<I", raw_len)
-    if length <= 0 or length > MAX_FRAME:
+    if length <= 0 or length > SOCKET_MAX_FRAME:
         return None
     data = sys.stdin.buffer.read(length)
     if len(data) < length:
@@ -128,10 +132,10 @@ def read_message() -> dict | None:
 
 def write_message(msg: dict) -> None:
     encoded = json.dumps(msg).encode("utf-8")
-    if len(encoded) > MAX_FRAME:
-        encoded = json.dumps({"ok": False, "error": "Request failed"}).encode(
-            "utf-8"
-        )
+    if len(encoded) > CHROME_MAX_FRAME:
+        encoded = json.dumps(
+            {"ok": False, "error": "Vault response too large"}
+        ).encode("utf-8")
     sys.stdout.buffer.write(struct.pack("<I", len(encoded)))
     sys.stdout.buffer.write(encoded)
     sys.stdout.buffer.flush()
@@ -142,7 +146,7 @@ def _recv_frame(sock: socket.socket) -> dict:
     if len(header) < 4:
         return {"ok": False, "error": "Empty response from OpenKey"}
     (length,) = struct.unpack("<I", header)
-    if length <= 0 or length > MAX_FRAME:
+    if length <= 0 or length > SOCKET_MAX_FRAME:
         return {"ok": False, "error": "Response too large"}
     body = b""
     while len(body) < length:
@@ -155,19 +159,24 @@ def _recv_frame(sock: socket.socket) -> dict:
     return json.loads(body.decode("utf-8"))
 
 
+def _send_and_recv(sock: socket.socket, payload: dict) -> dict:
+    encoded = json.dumps(payload).encode("utf-8")
+    if len(encoded) > SOCKET_MAX_FRAME:
+        return {"ok": False, "error": "Request failed"}
+    sock.sendall(struct.pack("<I", len(encoded)) + encoded)
+    return _recv_frame(sock)
+
+
 def forward_unix(msg: dict) -> dict:
     path = socket_path()
     if not path.exists():
         return {"ok": False, "error": f"OpenKey socket missing: {path}"}
     payload = with_auth(msg, unix_token(path))
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(2.5)
+        sock.settimeout(CONNECT_TIMEOUT)
         sock.connect(str(path))
-        encoded = json.dumps(payload).encode("utf-8")
-        if len(encoded) > MAX_FRAME:
-            return {"ok": False, "error": "Request failed"}
-        sock.sendall(struct.pack("<I", len(encoded)) + encoded)
-        return _recv_frame(sock)
+        sock.settimeout(RECV_TIMEOUT)
+        return _send_and_recv(sock, payload)
 
 
 def forward_tcp(msg: dict) -> dict:
@@ -178,12 +187,9 @@ def forward_tcp(msg: dict) -> dict:
             "error": "OpenKey is not running or vault is locked",
         }
     payload = with_auth(msg, windows_token())
-    with socket.create_connection(("127.0.0.1", port), timeout=2.5) as sock:
-        encoded = json.dumps(payload).encode("utf-8")
-        if len(encoded) > MAX_FRAME:
-            return {"ok": False, "error": "Request failed"}
-        sock.sendall(struct.pack("<I", len(encoded)) + encoded)
-        return _recv_frame(sock)
+    with socket.create_connection(("127.0.0.1", port), timeout=CONNECT_TIMEOUT) as sock:
+        sock.settimeout(RECV_TIMEOUT)
+        return _send_and_recv(sock, payload)
 
 
 def forward(msg: dict) -> dict:

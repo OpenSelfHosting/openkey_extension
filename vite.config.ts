@@ -17,6 +17,20 @@ function copyExtensionIcons() {
   };
 }
 
+/** Brand SVGs shared with OpenKey_app (login / folder icons). */
+function copyBrandIcons() {
+  return {
+    name: "openkey-copy-brand-icons",
+    closeBundle() {
+      const src = path.resolve(__dirname, "../OpenKey_app/assets/brands");
+      const dest = path.resolve(__dirname, "dist/brands");
+      if (!existsSync(src)) return;
+      mkdirSync(dest, { recursive: true });
+      cpSync(src, dest, { recursive: true });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     webExtension({
@@ -29,6 +43,7 @@ export default defineConfig({
       assets: "icons",
     }),
     copyExtensionIcons(),
+    copyBrandIcons(),
   ],
   build: {
     outDir: "dist",

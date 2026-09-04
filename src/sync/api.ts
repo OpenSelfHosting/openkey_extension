@@ -4,6 +4,7 @@ import type {
   StoredCollection,
   StoredEntry,
 } from "../shared/types";
+import { normalizeFolderId } from "../shared/vault_scope";
 import {
   getServerRevision,
   saveSettings,
@@ -223,7 +224,7 @@ export async function lookupPublicKey(
 function mapEntry(e: Record<string, unknown>): StoredEntry {
   return {
     uuid: e.uuid as string,
-    collectionUuid: (e.collection_uuid as string) ?? null,
+    collectionUuid: normalizeFolderId(e.collection_uuid as string | null),
     encryptedPayload: e.encrypted_payload as string,
     revision: (e.revision as number) ?? 1,
     isDeleted: (e.is_deleted as boolean) ?? false,
@@ -238,7 +239,7 @@ function mapCollection(c: Record<string, unknown>): StoredCollection {
     encryptedName: c.encrypted_name as string,
     icon: (c.icon as string) ?? "material:folder",
     color: (c.color as number) ?? null,
-    parentUuid: (c.parent_uuid as string) ?? null,
+    parentUuid: normalizeFolderId(c.parent_uuid as string | null),
     sortOrder: (c.sort_order as number) ?? 0,
     revision: (c.revision as number) ?? 1,
     isDeleted: (c.is_deleted as boolean) ?? false,

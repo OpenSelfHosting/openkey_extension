@@ -99,74 +99,77 @@ body {
 }
 
 #app:has(#lockedView:not([hidden])) {
-  padding: 12px 12px 14px;
+  padding: 16px 16px 20px;
 }
 
-/* ── Locked header / auth ─────────────────────────────────────────── */
+/* ── AuthBrandHero (matches OpenKey_app) ───────────────────────────── */
 
-#lockedHeader {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
+.auth-hero {
+  text-align: center;
+  margin: 4px 0 16px;
+  animation: heroIn 0.55s var(--spring) both;
 }
 
-#lockedHeader[hidden] {
-  display: none !important;
+@keyframes heroIn {
+  from {
+    transform: scale(0.92);
+    opacity: 0.65;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
-.brand-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+.auth-morph {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 16px;
   display: grid;
   place-items: center;
   background: var(--primary-container);
   color: var(--on-primary-container);
-  flex-shrink: 0;
+  animation: morphCookie 12s ease-in-out infinite;
 }
 
-h1 {
+@keyframes morphCookie {
+  0%,
+  100% {
+    border-radius: 40% 60% 55% 45% / 55% 42% 58% 45%;
+  }
+  25% {
+    border-radius: 62% 38% 48% 52% / 42% 58% 42% 58%;
+  }
+  50% {
+    border-radius: 48% 52% 42% 58% / 58% 42% 58% 42%;
+  }
+  75% {
+    border-radius: 50%;
+  }
+}
+
+.auth-hero h1 {
   margin: 0;
-  flex: 1;
-  font-size: 1.15rem;
+  font-size: 1.5rem;
   font-weight: 800;
-  letter-spacing: 0.04em;
+  letter-spacing: -0.3px;
+  line-height: 1.1;
 }
 
 .brand-open {
-  color: var(--text);
+  color: var(--on-surface);
 }
 
 .brand-key {
   color: var(--primary);
 }
 
-.hero {
-  background: var(--surface);
-  border: 1px solid var(--outline);
-  border-radius: var(--radius);
-  padding: 12px;
-  text-align: center;
-  margin-bottom: 10px;
-}
-
-.hero-icon {
-  width: 44px;
-  height: 44px;
-  margin: 0 auto 8px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  background: var(--primary-container);
-  color: var(--on-primary-container);
-}
-
 .hero-sub {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.8rem;
-  line-height: 1.35;
+  margin: 0 0 20px;
+  color: var(--on-surface-variant);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: center;
 }
 
 .mode-switch {
@@ -216,19 +219,18 @@ label[hidden],
 }
 
 input {
-  border: 1px solid var(--outline);
-  background: var(--surface);
+  border: none;
+  background: var(--surface-container-highest);
   color: var(--text);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 14px 16px;
   font-size: 0.95rem;
   font-family: inherit;
 }
 
 input:focus {
-  outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
-  outline-offset: 1px;
-  border-color: var(--primary);
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--primary);
 }
 
 button {
@@ -271,6 +273,14 @@ button.compact {
   border-radius: 10px;
 }
 
+button.auth-cta {
+  height: 56px;
+  margin-top: 12px;
+  border-radius: 28px;
+  letter-spacing: 0.08em;
+  font-size: 0.88rem;
+}
+
 button:disabled {
   opacity: 0.55;
   cursor: default;
@@ -310,6 +320,37 @@ button:disabled {
   background: var(--surface-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.68rem;
+}
+
+.ext-id-row {
+  margin-top: 10px;
+}
+
+.ext-id-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.ext-id-box code {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.ext-id-box .ghost {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.75rem;
 }
 
 .error {
@@ -465,7 +506,7 @@ button:disabled {
   align-items: center;
   gap: 12px;
   background: var(--surface-container);
-  padding: 10px 8px 10px 14px;
+  padding: 16px;
   cursor: pointer;
   transition: transform 0.18s var(--spring-out), background 0.15s ease;
   border: none;
@@ -534,11 +575,13 @@ button:disabled {
   padding: 8px 4px;
   font-size: 1rem;
   outline: none;
+  box-shadow: none;
 }
 
 .search-bar input:focus {
   outline: none;
   border: none;
+  box-shadow: none;
 }
 
 .status-line {
@@ -764,7 +807,7 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 12px 12px;
+  padding: 0 16px 16px;
 }
 
 /* ── ActionItem list (Material Expressive segmented tiles) ─────────── */
@@ -781,7 +824,7 @@ button:disabled {
   align-items: center;
   gap: 12px;
   background: var(--surface-container);
-  padding: 12px 14px;
+  padding: 16px;
   cursor: pointer;
   transition: transform 0.18s var(--spring-out), background 0.15s ease;
   border: none;
@@ -851,6 +894,11 @@ button:disabled {
   color: var(--on-primary-container);
 }
 
+.item-icon.secondary {
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+}
+
 .item-icon.tertiary {
   background: var(--tertiary-container);
   color: var(--on-tertiary-container);
@@ -858,6 +906,28 @@ button:disabled {
 
 .item-icon.cookie {
   border-radius: 40% 60% 55% 45% / 55% 40% 60% 45%;
+}
+
+.item-icon.entry-icon-media,
+.detail-avatar.entry-icon-media {
+  background: transparent;
+  color: inherit;
+  padding: 4px;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.item-icon.entry-icon-media img,
+.detail-avatar.entry-icon-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.detail-avatar.entry-icon-media {
+  padding: 12px;
+  border-radius: 24px;
 }
 
 .item-body {
@@ -1039,6 +1109,18 @@ button:disabled {
 .settings-panel,
 .sub-panel {
   padding-top: 4px;
+}
+
+.hub-subtitle {
+  margin: 8px 4px 16px;
+  color: var(--on-surface-variant);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.settings-panel .item-icon.cookie {
+  width: 44px;
+  height: 44px;
 }
 
 .detail[hidden],
@@ -1319,11 +1401,13 @@ button:disabled {
   font-weight: 700;
 }
 
-#unlockedView.detail-open .me-nav {
+#unlockedView.detail-open .me-nav,
+#unlockedView.nested-open .me-nav {
   display: none;
 }
 
-#unlockedView.detail-open .shell {
+#unlockedView.detail-open .shell,
+#unlockedView.nested-open .shell {
   padding-bottom: 8px;
 }
 
@@ -1400,7 +1484,7 @@ button:disabled {
   bottom: 0;
   height: var(--nav-height);
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   background: var(--surface-container-high);
   box-shadow: 0 -1px 0 color-mix(in srgb, var(--outline) 40%, transparent);
   z-index: 10;
@@ -1690,29 +1774,75 @@ html[data-theme="dark"] {
   line-height: 1.45;
 }
 
+.filter-bar {
+  padding: 0 0 8px;
+}
+
+.filter-bar[hidden] {
+  display: none !important;
+}
+
 .chip-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
-  padding: 4px 2px 12px;
+  padding: 4px 2px 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.chip-row::-webkit-scrollbar {
+  display: none;
 }
 
 .me-chip-btn {
-  border: 1px solid var(--outline);
-  background: var(--surface);
-  color: var(--text);
+  width: auto;
+  min-width: unset;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container-high);
+  color: var(--on-surface-variant);
   border-radius: 999px;
-  padding: 0.4rem 0.85rem;
+  padding: 6px 12px;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 650;
   cursor: pointer;
+  letter-spacing: 0;
 }
 
 .me-chip-btn.active {
-  background: var(--primary-container);
-  color: var(--on-primary-container);
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
   border-color: transparent;
+}
+
+.action-list > li.section-label {
+  background: transparent;
+  cursor: default;
+  padding: 14px 4px 8px;
+  margin: 0;
+  border-radius: 0;
+  width: 100%;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant);
+  gap: 0;
+}
+
+.action-list > li.section-label:first-child {
+  padding-top: 4px;
+}
+
+.action-list > li.section-label:hover,
+.action-list > li.section-label:active,
+.action-list > li.section-label:focus-visible {
+  background: transparent;
+  transform: none;
+  outline: none;
 }
 
 .btn-tonal.danger,
@@ -1748,8 +1878,20 @@ html[data-theme="dark"] {
 }
 
 .folder-row .item-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
   background: var(--secondary-container);
   color: var(--on-secondary-container);
+}
+
+.folder-row .item-icon svg {
+  width: 30px;
+  height: 30px;
+}
+
+.folder-row .item-icon.entry-icon-media {
+  background: transparent;
 }
 
 .breadcrumb {

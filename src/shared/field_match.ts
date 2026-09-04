@@ -25,6 +25,19 @@ export function isLikelyUsernameField(input: {
   return /user|email|login|account|phone|mobile/.test(hint);
 }
 
+/** Matches Android AssistStructureParser.isNewPasswordHint. */
+export function isNewPasswordField(input: {
+  autocomplete?: string;
+  hint?: string;
+}): boolean {
+  const blob = `${input.autocomplete || ""} ${input.hint || ""}`.toLowerCase();
+  return (
+    blob.includes("new-password") ||
+    blob.includes("new_password") ||
+    blob.includes("newpassword")
+  );
+}
+
 export function isLikelyTokenField(hint: string): boolean {
   return /api[_\s.-]?key|api[_\s.-]?token|access[_\s.-]?token|secret[_\s.-]?key|bearer|x-api-key|auth[_\s.-]?token|\btoken\b|personal[_\s.-]?access|\bpat\b|client[_\s.-]?secret/i.test(
     hint,

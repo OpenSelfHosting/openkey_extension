@@ -9,15 +9,39 @@ export type NativeLoginPayload = {
   urls: string[];
   passkey?: PasskeyPayload | null;
   notes?: string;
+  icon?: string;
+};
+
+export type NativeCardPayload = {
+  name?: string;
+  holder?: string;
+  number?: string;
+  expiry?: string;
+  cvc?: string;
+  brand?: string;
+  notes?: string;
+  bank?: string;
+};
+
+export type NativeCryptoPayload = {
+  name?: string;
+  network?: string;
+  address?: string;
+  privateKey?: string;
+  seedPhrase?: string;
+  notes?: string;
+  folder?: string;
 };
 
 export type NativeRequest =
   | { type: "ping" }
   | { type: "listForOrigin"; origin: string }
-  | { type: "listEntries" }
+  | { type: "listEntries"; origin?: string }
   | { type: "listCards" }
   | { type: "listCrypto" }
   | { type: "listSecrets" }
+  | { type: "listCollections" }
+  | { type: "listVault" }
   | { type: "getEntry"; uuid: string }
   | { type: "createEntry"; entry: NativeLoginPayload }
   | { type: "updateEntry"; uuid: string; entry: NativeLoginPayload }
@@ -27,29 +51,61 @@ export type NativeRequest =
       uuid: string;
       signCount: number;
     }
-      | {
-          type: "createSecret";
-          secret: {
-            name: string;
-            kind?: string;
-            username?: string;
-            host?: string;
-            publicKey?: string;
-            secret?: string;
-            passphrase?: string;
-            notes?: string;
-            device?: string;
-          };
-        }
-  | { type: "deleteSecret"; uuid: string };
+  | {
+      type: "createSecret";
+      secret: {
+        name: string;
+        kind?: string;
+        username?: string;
+        host?: string;
+        publicKey?: string;
+        secret?: string;
+        passphrase?: string;
+        notes?: string;
+        device?: string;
+      };
+    }
+  | {
+      type: "updateSecret";
+      uuid: string;
+      secret: {
+        name?: string;
+        kind?: string;
+        username?: string;
+        host?: string;
+        publicKey?: string;
+        secret?: string;
+        passphrase?: string;
+        notes?: string;
+        device?: string;
+      };
+    }
+  | { type: "deleteSecret"; uuid: string }
+  | { type: "createCard"; card: NativeCardPayload }
+  | { type: "updateCard"; uuid: string; card: NativeCardPayload }
+  | { type: "deleteCard"; uuid: string }
+  | { type: "createCrypto"; wallet: NativeCryptoPayload }
+  | { type: "updateCrypto"; uuid: string; wallet: NativeCryptoPayload }
+  | { type: "deleteCrypto"; uuid: string };
 
 export type NativeResponse =
   | { ok: true; unlocked: boolean }
+  | {
+      ok: true;
+      entries: DecryptedEntry[];
+      collections: import("../shared/types").DecryptedCollection[];
+      cards?: import("../shared/types").DecryptedCard[];
+      wallets?: import("../shared/types").DecryptedCrypto[];
+      secrets?: import("../shared/types").DecryptedSecret[];
+    }
   | { ok: true; entries: DecryptedEntry[] }
   | { ok: true; cards: import("../shared/types").DecryptedCard[] }
   | { ok: true; wallets: import("../shared/types").DecryptedCrypto[] }
   | { ok: true; secrets: import("../shared/types").DecryptedSecret[] }
+  | { ok: true; collections: import("../shared/types").DecryptedCollection[] }
   | { ok: true; secret: import("../shared/types").DecryptedSecret }
+  | { ok: true; card: import("../shared/types").DecryptedCard }
+  | { ok: true; wallet: import("../shared/types").DecryptedCrypto }
   | { ok: true; entry: DecryptedEntry | null }
   | { ok: true }
   | { ok: false; error: string };
@@ -61,6 +117,27 @@ export function isNativeMessagingAvailable(): boolean {
 export async function nativeRequest(
   msg: NativeRequest,
   timeoutMs = 2500,
+): Promise<NativeResponse> {
+  if (msg.type === "ping") {
+    return nativeRequestUnqueued(msg, timeoutMs);
+  }
+  return enqueueNative(() => nativeRequestUnqueued(msg, timeoutMs));
+}
+
+let nativeQueue: Promise<void> = Promise.resolve();
+
+function enqueueNative<T>(fn: () => Promise<T>): Promise<T> {
+  const run = nativeQueue.then(fn, fn);
+  nativeQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function nativeRequestUnqueued(
+  msg: NativeRequest,
+  timeoutMs: number,
 ): Promise<NativeResponse> {
   if (!isNativeMessagingAvailable()) {
     return { ok: false, error: "Native messaging unavailable" };

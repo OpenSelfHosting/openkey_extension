@@ -6,6 +6,7 @@ import type {
   CardPayload,
   CryptoPayload,
   DecryptedCard,
+  DecryptedCollection,
   DecryptedCrypto,
   DecryptedEntry,
   DecryptedSecret,
@@ -18,6 +19,7 @@ import {
   isReservedCollection,
   normalizeSecretKind,
 } from "../../shared/types";
+import { normalizeFolderId } from "../../shared/vault_scope";
 
 export type VaultRowMeta = {
   uuid: string;
@@ -32,7 +34,7 @@ export function normalizeLogin(
   return {
     kind: "login",
     uuid: row.uuid,
-    collectionUuid: row.collectionUuid,
+    collectionUuid: normalizeFolderId(row.collectionUuid),
     revision: row.revision,
     title: payload.title ?? "",
     username: payload.username ?? "",
@@ -86,6 +88,7 @@ export function normalizeCrypto(
     privateKey: payload.privateKey ?? "",
     seedPhrase: payload.seedPhrase ?? "",
     notes: payload.notes ?? "",
+    folder: payload.folder ?? "",
   };
 }
 
@@ -147,12 +150,17 @@ export function asLoginFromNative(
   e: DecryptedEntry | Record<string, unknown>,
 ): DecryptedEntry {
   const row = e as DecryptedEntry;
-  if (row.kind === "login") return row;
+  if (row.kind === "login") {
+    const collectionUuid = normalizeFolderId(row.collectionUuid);
+    if (collectionUuid === (row.collectionUuid ?? null)) return row;
+    return { ...row, collectionUuid };
+  }
   return {
     kind: "login",
     uuid: String((e as { uuid?: string }).uuid ?? ""),
-    collectionUuid:
-      (e as { collectionUuid?: string | null }).collectionUuid ?? null,
+    collectionUuid: normalizeFolderId(
+      (e as { collectionUuid?: string | null }).collectionUuid,
+    ),
     revision: (e as { revision?: number }).revision ?? 1,
     title: String((e as { title?: string }).title ?? ""),
     username: String((e as { username?: string }).username ?? ""),
@@ -232,4 +240,120 @@ export function secretKindLabelFallback(
     default:
       return "Secret";
   }
+}
+
+export function mapNativeCollections(
+  raw: unknown,
+): DecryptedCollection[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(
+      (c): c is Record<string, unknown> =>
+        !!c &&
+        typeof c === "object" &&
+        typeof (c as { uuid?: unknown }).uuid === "string" &&
+        !isReservedCollection(String((c as { uuid: string }).uuid)),
+    )
+    .map((c) => ({
+      uuid: String(c.uuid),
+      name: String(c.name ?? "") || "Folder",
+      icon: String(c.icon ?? "") || "material:folder",
+      color: typeof c.color === "number" ? c.color : null,
+      parentUuid: normalizeFolderId(
+        (c.parentUuid as string | null | undefined) ?? null,
+      ),
+      sortOrder: Number(c.sortOrder ?? 0),
+    }))
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+}
+
+export function asCardFromNative(
+  c: DecryptedCard | Record<string, unknown>,
+): DecryptedCard {
+  const row = c as DecryptedCard;
+  return {
+    ...row,
+    kind: "card",
+    type: "card",
+    uuid: String(row.uuid ?? ""),
+    collectionUuid: String(
+      row.collectionUuid ?? ReservedCollections.wallets,
+    ),
+    revision: Number(row.revision ?? 1),
+    name: String(row.name ?? ""),
+    holder: String(row.holder ?? ""),
+    number: String(row.number ?? ""),
+    expiry: String(row.expiry ?? ""),
+    cvc: String(row.cvc ?? ""),
+    notes: String(row.notes ?? ""),
+  };
+}
+
+export function asCryptoFromNative(
+  w: DecryptedCrypto | Record<string, unknown>,
+): DecryptedCrypto {
+  const row = w as DecryptedCrypto;
+  return {
+    ...row,
+    kind: "crypto",
+    type: "crypto",
+    uuid: String(row.uuid ?? ""),
+    collectionUuid: String(
+      row.collectionUuid ?? ReservedCollections.crypto,
+    ),
+    revision: Number(row.revision ?? 1),
+    name: String(row.name ?? ""),
+    network: (row.network as DecryptedCrypto["network"]) ?? "other",
+    address: String(row.address ?? ""),
+    privateKey: String(row.privateKey ?? ""),
+    seedPhrase: String(row.seedPhrase ?? ""),
+    notes: String(row.notes ?? ""),
+    folder: String(row.folder ?? ""),
+  };
+}
+
+export function asSecretFromNative(
+  s: Record<string, unknown>,
+): DecryptedSecret {
+  return normalizeSecret(
+    {
+      uuid: String(s.uuid ?? ""),
+      collectionUuid:
+        (s.collectionUuid as string | null | undefined) ??
+        ReservedCollections.secrets,
+      revision: Number(s.revision ?? 1),
+    },
+    {
+      type: "secret",
+      name: String(s.name ?? ""),
+      kind: String(s.secretKind ?? s.kind ?? "other"),
+      secretKind: String(s.secretKind ?? s.kind ?? ""),
+      username: String(s.username ?? ""),
+      host: String(s.host ?? ""),
+      publicKey: String(s.publicKey ?? ""),
+      secret: String(s.secret ?? ""),
+      passphrase: String(s.passphrase ?? ""),
+      notes: String(s.notes ?? ""),
+      device: String(s.device ?? ""),
+    },
+  );
+}
+
+export function nativeErrorMessage(error: string | undefined): string {
+  const raw = (error ?? "").trim();
+  if (!raw || raw === "Request failed" || /timeout/i.test(raw)) {
+    return "Couldn’t load the vault from the desktop app. Keep OpenKey unlocked and try again.";
+  }
+  if (/too large/i.test(raw)) {
+    return "The vault is too large to send to the extension. Update the OpenKey desktop app.";
+  }
+  if (/unknown type/i.test(raw)) {
+    return "Couldn’t load the vault from the desktop app. Keep OpenKey unlocked and try again.";
+  }
+  return raw;
+}
+
+/** Older desktops reject `listVault` / `listCollections`; that is not a vault-load failure. */
+export function isUnsupportedNativeType(error: string | undefined): boolean {
+  return /unknown type/i.test((error ?? "").trim());
 }

@@ -1,10 +1,12 @@
 # OpenKey Browser Extension
 
-MV3 extension for Chrome and Firefox with:
+Open-source MV3 extension for Chrome and Firefox. It implements the same vault protocol as the official app ([spec](https://github.com/OpenSelfHosting/OpenKey/tree/main/spec)). Download the **official desktop/mobile app** from [OpenKey Releases](https://github.com/OpenSelfHosting/OpenKey/releases) — app source is not public.
+
+MV3 extension with:
 
 1. **Standalone vault** — unlock with master password, sync ciphertext from your self-hosted OpenKey server
 2. **Native bridge** — when the desktop OpenKey app is unlocked, fill (and save) via native messaging
-3. **Autofill** — content-script overlays, context menu, and keyboard shortcut for logins and payment cards
+3. **Autofill** — field-anchored picker matching the OpenKey app (username + masked password, Suggest password, Unlock / Manage), plus overlays, context menu, and keyboard shortcut
 4. **Save / update** — capture new logins from the page and store them in the vault
 5. **Passkeys** — intercepts WebAuthn `create` / `get` on sites, stores ES256 credentials in the vault (extension unlocked)
 6. **Cards, crypto & secrets** — browse payment cards, crypto wallets, and developer secrets (API tokens, SSH keys, `.env`); fill card forms and token fields; copy wallet address / secrets
@@ -21,7 +23,7 @@ npm run build
 
 Load `dist/` as an unpacked extension in Chrome (`chrome://extensions`) or Firefox (`about:debugging`).
 
-**Recent UX:** multi-match credential picker, live lock/unlock overlay sync, branded in-page UI, toolbar lock badge, username-field overlays, clipboard auto-clear, context-menu copy/generate, and mode-aware settings when using the desktop bridge.
+**Recent UX:** Android-style field-anchored autofill (credential rows, Suggest password, Unlock OpenKey), live lock/unlock overlay sync, Material Expressive in-page UI, toolbar lock badge, clipboard auto-clear, context-menu copy/generate, and mode-aware settings when using the desktop bridge.
 
 ## Permissions (`<all_urls>`)
 
@@ -62,7 +64,7 @@ Manifest templates live in `native-host/`. The Flutter desktop app registers the
 
 - `ping` → `{ ok, unlocked }`
 - `listForOrigin` → decrypted entries for the tab origin (all folders)
-- `listEntries` → all decrypted login entries
+- `listEntries` → all decrypted login entries (optional `origin` filters like Autofill)
 - `listCards` → payment cards from the reserved wallets collection
 - `listCrypto` → crypto wallets from the reserved crypto collection
 - `listSecrets` → developer secrets (API tokens, SSH keys, `.env`) from `__dev_secrets__`
@@ -70,14 +72,16 @@ Manifest templates live in `native-host/`. The Flutter desktop app registers the
 - `createEntry` → create a login from `{ title, username, password, urls, passkey? }`
 - `updateEntry` → update password/username/urls/passkey for a uuid
 - `deleteEntry` → soft-delete a login by uuid
-- `createSecret` / `deleteSecret` → developer secrets CRUD
+- `createSecret` / `updateSecret` / `deleteSecret` → developer secrets CRUD
+- `createCard` / `updateCard` / `deleteCard` → payment cards (including bank folder)
+- `createCrypto` / `updateCrypto` / `deleteCrypto` → crypto wallets (including folder)
 - `updatePasskeySignCount` → bump passkey signature counter after assertion
 
-**Native-mode limits in the extension UI:** folders, shares, orgs, sync, attachments, and card/crypto edits stay in the desktop app. Login fill/save/delete and passkeys work through the bridge.
+**Native-mode limits in the extension UI:** vault folders, shares, orgs, sync, and attachments stay in the desktop app. Login/card/crypto/secret fill, create, edit, and delete, plus passkeys, work through the bridge.
 
 ### Windows
 
-The desktop app ships `openkey_native_host.exe` next to `openkey_app.exe`. Opening **Settings → Autofill** registers the host in the Chrome / Edge / Firefox registries under `HKCU\Software\...\NativeMessagingHosts\com.openselfhosting.openkey`.
+The desktop app ships `openkey_native_host.exe` next to `openkey_app.exe`. Opening **Settings → Security** (Autofill toggle) registers the host in the Chrome / Edge / Firefox registries under `HKCU\Software\...\NativeMessagingHosts\com.openselfhosting.openkey`.
 
 For Chromium browsers, write your unpacked extension ID to:
 
@@ -95,7 +99,9 @@ When the vault unlocks, OpenKey installs `openkey_native_host.py` and writes hos
 - `~/Library/Application Support/Chromium/NativeMessagingHosts/`
 - `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/`
 - `~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts/`
+- `~/Library/Application Support/Vivaldi/NativeMessagingHosts/`
 - `~/Library/Application Support/Mozilla/NativeMessagingHosts/`
+- `~/Library/Application Support/librewolf/NativeMessagingHosts/`
 
 1. Load the unpacked extension and copy its ID from the extension popup or Options page.
 2. In the app: **Settings → Browser extension** — paste the ID and tap **Connect extension**.
@@ -105,12 +111,16 @@ Requires Python 3 on `PATH` (`#!/usr/bin/env python3`).
 
 ### Linux
 
-The desktop app ships `openkey_native_host` next to `openkey_app`. Opening **Settings → Autofill** writes host manifests under:
+The desktop app ships `openkey_native_host` next to `openkey_app`. Opening **Settings → Security** (Autofill toggle) writes host manifests under:
 
 - `~/.config/google-chrome/NativeMessagingHosts/`
+- `~/.config/google-chrome-beta/NativeMessagingHosts/`
 - `~/.config/chromium/NativeMessagingHosts/`
 - `~/.config/microsoft-edge/NativeMessagingHosts/`
+- `~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/`
+- `~/.config/vivaldi/NativeMessagingHosts/`
 - `~/.mozilla/native-messaging-hosts/`
+- `~/.librewolf/native-messaging-hosts/`
 
 For Chromium browsers, write your unpacked extension ID to:
 

@@ -2,30 +2,56 @@ import type {
   DecryptedCard,
   DecryptedEntry,
   DecryptedSecret,
+  SessionState,
 } from "../shared/types";
-import { fillUsername } from "../shared/types";
+import { fillUsername, SESSION_STORAGE_KEY, sessionLooksUnlocked } from "../shared/types";
 import {
   fieldHintText,
   isAutofillIgnored,
   isLikelyTokenField,
   isLikelyUsernameField,
+  isNewPasswordField,
   selectPreferredIndex,
 } from "../shared/field_match";
 import { copyText } from "../shared/clipboard";
 import {
-  OK_BRAND,
-  iconCard,
+  AUTOFILL_MANAGE_ID,
+  AUTOFILL_SUGGEST_ID,
+  AUTOFILL_UNLOCK_ID,
+  autofillTheme,
+  dismissActivePicker,
   iconKey,
-  iconLock,
+  loginAutofillItems,
   overlayEmptyHint,
+  paintOverlayButton,
+  PICKER_SESSION_UNLOCKED,
+  shouldSuggestPassword,
   showPagePicker,
   showPageToast,
-  styleGhostButton,
-  styleOverlayButton,
-  stylePrimaryButton,
+  type PagePickerItem,
 } from "../shared/page_ui";
+import { pickerVisual } from "../shared/entry_icon";
+import type { PickerVisual } from "../shared/entry_icon";
+import {
+  applyNativeAutofillSuppress,
+  documentFaviconUrl,
+  injectNativeAutofillHideStyle,
+  shouldSuppressNativeAutofill,
+} from "../shared/native_autofill";
+import {
+  mutationsAffectPageFields,
+  overlayPaintSignature,
+  stampOpenKeyUiTree,
+} from "../shared/overlay_dom";
 
-type CaptureAction = "none" | "save" | "update" | "need_unlock";
+type CaptureAction =
+  | "none"
+  | "save"
+  | "update"
+  | "saved"
+  | "updated"
+  | "need_unlock"
+  | "error";
 
 type CaptureResponse = {
   action: CaptureAction;
@@ -34,17 +60,14 @@ type CaptureResponse = {
   error?: string;
 };
 
-type SaveResponse = {
-  ok: boolean;
-  error?: string;
-};
-
 const dismissed = new Set<string>();
 let bannerEl: HTMLDivElement | null = null;
 let captureInFlight = false;
 let overlaySyncQueued = false;
 let applyingOverlays = false;
+let overlaySyncGen = 0;
 let vaultUnlocked: boolean | null = null;
+const unlockWaiters = new Set<(unlocked: boolean) => void>();
 
 type OverlayKind = "password" | "username" | "card" | "token";
 
@@ -58,15 +81,54 @@ type OverlayIcon = {
 const overlayIcons: OverlayIcon[] = [];
 let unlockCheckedAt = 0;
 const UNLOCK_TTL_MS = 2500;
+const ORIGIN_ENTRIES_TTL_MS = 4000;
+const OVERLAY_SYNC_DEBOUNCE_MS = 80;
+
+let originFillCache: {
+  href: string;
+  at: number;
+  entries: DecryptedEntry[];
+} | null = null;
+
+const AUTOFILL_ICON_OPTS = { preferSiteArtwork: true as const };
+
+const USERNAME_INPUT_SEL = [
+  'input[type="email"]',
+  'input[type="text"]',
+  'input[name*="user" i]',
+  'input[name*="email" i]',
+  'input[autocomplete="username"]',
+  'input[autocomplete="email"]',
+  'input[data-openkey-autocomplete="username"]',
+  'input[data-openkey-autocomplete="email"]',
+].join(", ");
+
+function fieldAutocomplete(
+  el: HTMLInputElement | HTMLTextAreaElement,
+): string {
+  return (
+    el.dataset.openkeyAutocomplete ||
+    el.getAttribute("autocomplete") ||
+    el.autocomplete ||
+    ""
+  );
+}
+
+function pageArtwork(): { pageUrl: string; pageIconUrl?: string } {
+  return {
+    pageUrl: location.href,
+    pageIconUrl: documentFaviconUrl(document),
+  };
+}
 
 async function refreshUnlockState(force = false): Promise<boolean> {
   const now = Date.now();
   if (
     !force &&
-    vaultUnlocked !== null &&
+    vaultUnlocked === true &&
     now - unlockCheckedAt < UNLOCK_TTL_MS
   ) {
-    return vaultUnlocked;
+    return true;
   }
   try {
     const res = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
@@ -78,11 +140,103 @@ async function refreshUnlockState(force = false): Promise<boolean> {
   return !!vaultUnlocked;
 }
 
-function clearAllOverlayIcons(): void {
-  for (let i = overlayIcons.length - 1; i >= 0; i--) {
-    removeOverlayIcon(overlayIcons[i]!);
-    overlayIcons.splice(i, 1);
+function applySessionUnlock(unlocked: boolean): void {
+  const wasUnlocked = vaultUnlocked === true;
+  vaultUnlocked = unlocked;
+  unlockCheckedAt = Date.now();
+  originFillCache = null;
+  const waiters = [...unlockWaiters];
+  unlockWaiters.clear();
+  for (const w of waiters) w(unlocked);
+  if (unlocked && !wasUnlocked) {
+    dismissActivePicker(PICKER_SESSION_UNLOCKED);
+  } else if (!unlocked && wasUnlocked) {
+    dismissActivePicker(null);
   }
+  scheduleOverlaySync();
+}
+
+function waitUntilUnlocked(timeoutMs: number): Promise<boolean> {
+  if (vaultUnlocked) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) return;
+      done = true;
+      window.clearInterval(iv);
+      unlockWaiters.delete(onUnlock);
+      resolve(ok);
+    };
+    const onUnlock = (unlocked: boolean) => {
+      if (unlocked) finish(true);
+    };
+    unlockWaiters.add(onUnlock);
+    const iv = window.setInterval(() => {
+      void refreshUnlockState(true).then((ok) => {
+        if (ok) finish(true);
+      });
+    }, 400);
+    window.setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+function watchExtensionSession(): void {
+  try {
+    chrome.storage.session.onChanged.addListener((changes) => {
+      const ch = changes[SESSION_STORAGE_KEY];
+      if (!ch) return;
+      applySessionUnlock(
+        sessionLooksUnlocked(ch.newValue as SessionState | undefined),
+      );
+    });
+  } catch {
+    /* session storage not exposed to this page */
+  }
+}
+
+async function bootstrapUnlockState(): Promise<void> {
+  try {
+    const data = await chrome.storage.session.get(SESSION_STORAGE_KEY);
+    if (
+      sessionLooksUnlocked(
+        data[SESSION_STORAGE_KEY] as SessionState | undefined,
+      )
+    ) {
+      applySessionUnlock(true);
+    }
+  } catch {
+    /* session storage not exposed yet */
+  }
+  applySessionUnlock(await refreshUnlockState(true));
+}
+
+async function ensureUnlockedFromPrompt(id: string | null): Promise<boolean> {
+  if (id !== AUTOFILL_UNLOCK_ID && id !== PICKER_SESSION_UNLOCKED) {
+    return false;
+  }
+  if (id === AUTOFILL_UNLOCK_ID) {
+    await openExtensionPopup();
+  }
+  return vaultUnlocked === true || (await waitUntilUnlocked(120_000));
+}
+
+async function promptUnlockIfNeeded(
+  field: HTMLInputElement | HTMLTextAreaElement,
+): Promise<boolean> {
+  if (await refreshUnlockState(true)) return true;
+  const id = await showFillPicker({
+    heading: "OpenKey",
+    items: loginAutofillItems({
+      unlocked: false,
+      entries: [],
+      includeSuggest: false,
+    }),
+    anchor: field,
+    variant: "autofill",
+  });
+  if (await ensureUnlockedFromPrompt(id)) return true;
+  await handleLoginPickerChoice(id, [], field);
+  return false;
 }
 
 async function notifyEmpty(kind: OverlayKind): Promise<void> {
@@ -95,7 +249,17 @@ async function generateIntoField(
   field: HTMLInputElement | HTMLTextAreaElement,
 ): Promise<void> {
   try {
-    const res = await chrome.runtime.sendMessage({ type: "GENERATE_PASSWORD" });
+    const res = await chrome.runtime.sendMessage({
+      type: "GENERATE_PASSWORD",
+      length: 20,
+      options: {
+        length: 20,
+        lower: true,
+        upper: true,
+        digits: true,
+        symbols: true,
+      },
+    });
     const password = res?.password as string | undefined;
     if (!password) {
       showPageToast("Could not generate password");
@@ -119,20 +283,135 @@ async function generateIntoField(
   }
 }
 
-async function offerGeneratePassword(
+async function openExtensionPopup(): Promise<void> {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "OPEN_POPUP" });
+    if (res?.opened) return;
+  } catch {
+    /* fall through */
+  }
+  showPageToast("Unlock OpenKey from the toolbar icon");
+}
+
+function formPasswordFields(field: HTMLElement): HTMLInputElement[] {
+  const all = findPasswordFields().filter(
+    (p) => !isLikelyTokenField(fieldHint(p)),
+  );
+  const form = field instanceof HTMLInputElement ? field.form : null;
+  if (!form) return all;
+  return all.filter((p) => p.form === form);
+}
+
+function loginPickerAnchor(): HTMLElement | undefined {
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLInputElement &&
+    (active.type === "password" ||
+      isLikelyUsernameField({
+        type: active.type,
+        autocomplete: fieldAutocomplete(active),
+        hint: fieldHint(active),
+      }))
+  ) {
+    return active;
+  }
+  return preferredPasswordField() ?? undefined;
+}
+
+let loginPickerField: HTMLElement | null = null;
+
+async function handleLoginPickerChoice(
+  id: string | null,
+  entries: DecryptedEntry[],
   field: HTMLInputElement | HTMLTextAreaElement,
+  opts?: {
+    passwordField?: HTMLInputElement | null;
+    usernameField?: HTMLInputElement | null;
+  },
 ): Promise<void> {
-  const id = await showFillPicker({
-    heading: "No logins for this site",
-    items: [
-      {
-        id: "generate",
-        title: "Generate password",
-        subtitle: "Fill this field and copy to clipboard",
-      },
-    ],
-  });
-  if (id === "generate") await generateIntoField(field);
+  if (!id) return;
+  if (id === AUTOFILL_UNLOCK_ID || id === AUTOFILL_MANAGE_ID) {
+    await openExtensionPopup();
+    return;
+  }
+  if (id === AUTOFILL_SUGGEST_ID) {
+    const pwd =
+      opts?.passwordField ??
+      (field instanceof HTMLInputElement && field.type === "password"
+        ? field
+        : preferredPasswordField());
+    if (pwd) await generateIntoField(pwd);
+    else showPageToast("No password field on this page");
+    return;
+  }
+  const entry = entries.find((e) => e.uuid === id);
+  if (entry) fillEntry(entry, opts);
+}
+
+async function openLoginAutofill(
+  field: HTMLInputElement | HTMLTextAreaElement,
+  opts?: {
+    passwordField?: HTMLInputElement | null;
+    usernameField?: HTMLInputElement | null;
+  },
+): Promise<void> {
+  if (loginPickerField === field) return;
+  loginPickerField = field;
+  try {
+    const unlocked = await promptUnlockIfNeeded(field);
+    const passwords = formPasswordFields(field);
+    const hasNewPassword = passwords.some((p) =>
+      isNewPasswordField({
+        autocomplete: fieldAutocomplete(p),
+        hint: fieldHint(p),
+      }),
+    );
+    if (!unlocked) {
+      return;
+    }
+    const res = await chrome.runtime.sendMessage({
+      type: "ENTRIES_FOR_ORIGIN",
+      origin: location.href,
+    });
+    const entries = (res?.entries ?? []) as DecryptedEntry[];
+    const includeSuggest = shouldSuggestPassword({
+      hasPasswordField: passwords.length > 0,
+      matchCount: entries.length,
+      hasNewPassword,
+    });
+    const items = loginAutofillItems({
+      unlocked: true,
+      entries: entries.map((e) => ({
+        uuid: e.uuid,
+        title: e.title,
+        username: fillUsername(e) || e.username,
+        icon: e.icon,
+        urls: e.urls,
+      })),
+      includeSuggest,
+      ...pageArtwork(),
+    });
+    const id = await showFillPicker({
+      heading: "OpenKey",
+      items,
+      anchor: field,
+      variant: "autofill",
+    });
+    await handleLoginPickerChoice(id, entries, field, {
+      passwordField:
+        opts?.passwordField ??
+        (field instanceof HTMLInputElement && field.type === "password"
+          ? field
+          : null),
+      usernameField:
+        opts?.usernameField ??
+        (field instanceof HTMLInputElement && field.type !== "password"
+          ? field
+          : null),
+    });
+  } finally {
+    if (loginPickerField === field) loginPickerField = null;
+  }
 }
 
 function preferredPasswordField(
@@ -155,12 +434,31 @@ function preferredPasswordField(
 
 function isVisible(el: HTMLElement): boolean {
   if (isAutofillIgnored(el)) return false;
+  if (!el.isConnected) return false;
   const style = window.getComputedStyle(el);
-  return (
-    style.visibility !== "hidden" &&
-    style.display !== "none" &&
-    el.offsetParent !== null
-  );
+  if (style.visibility === "hidden" || style.display === "none") return false;
+  const r = el.getBoundingClientRect();
+  return r.width >= 2 && r.height >= 2;
+}
+
+async function entriesForOrigin(force = false): Promise<DecryptedEntry[]> {
+  const href = location.href;
+  const now = Date.now();
+  if (
+    !force &&
+    originFillCache &&
+    originFillCache.href === href &&
+    now - originFillCache.at < ORIGIN_ENTRIES_TTL_MS
+  ) {
+    return originFillCache.entries;
+  }
+  const res = await chrome.runtime.sendMessage({
+    type: "ENTRIES_FOR_ORIGIN",
+    origin: href,
+  });
+  const entries = (res?.entries ?? []) as DecryptedEntry[];
+  originFillCache = { href, at: now, entries };
+  return entries;
 }
 
 function findPasswordFields(root: ParentNode = document): HTMLInputElement[] {
@@ -177,9 +475,7 @@ function findUsernameField(
   const form = passwordField.form;
   const scope: ParentNode = form ?? document;
   const candidates = Array.from(
-    scope.querySelectorAll<HTMLInputElement>(
-      'input[type="email"], input[type="text"], input[name*="user" i], input[name*="email" i], input[autocomplete="username"], input[autocomplete="email"]',
-    ),
+    scope.querySelectorAll<HTMLInputElement>(USERNAME_INPUT_SEL),
   ).filter(isVisible);
   if (!candidates.length) return null;
   const before = candidates.filter(
@@ -214,7 +510,7 @@ function findCardFields(): {
 
   const byAuto = (values: string[]) =>
     all.find((i) => {
-      const a = (i.autocomplete || "").toLowerCase();
+      const a = fieldAutocomplete(i).toLowerCase();
       return values.some((v) => a === v || a.includes(v));
     }) ?? null;
 
@@ -331,7 +627,7 @@ function fieldHint(el: HTMLInputElement | HTMLTextAreaElement): string {
     el.id,
     el.placeholder,
     el.getAttribute("aria-label"),
-    el.getAttribute("autocomplete"),
+    el.dataset.openkeyAutocomplete || el.getAttribute("autocomplete"),
     el.getAttribute("data-testid"),
   ]);
 }
@@ -364,7 +660,7 @@ function findUsernameCandidateFields(): HTMLInputElement[] {
     .filter((el) =>
       isLikelyUsernameField({
         type: el.type,
-        autocomplete: el.autocomplete,
+        autocomplete: fieldAutocomplete(el),
         hint: fieldHint(el),
       }),
     );
@@ -388,7 +684,7 @@ function findUsernameNearToken(
   const scope: ParentNode = form ?? document;
   const candidates = Array.from(
     scope.querySelectorAll<HTMLInputElement>(
-      'input[type="email"], input[type="text"], input[name*="user" i], input[autocomplete="username"]',
+      'input[type="email"], input[type="text"], input[name*="user" i], input[autocomplete="username"], input[data-openkey-autocomplete="username"]',
     ),
   ).filter(isVisible);
   if (!candidates.length) return null;
@@ -421,7 +717,7 @@ function fillSecret(
       (target && findUsernameNearToken(target)) ||
       Array.from(
         document.querySelectorAll<HTMLInputElement>(
-          'input[type="email"], input[autocomplete="username"]',
+          'input[type="email"], input[autocomplete="username"], input[data-openkey-autocomplete="username"]',
         ),
       ).filter(isVisible)[0];
     if (user) setNativeValue(user, secret.username);
@@ -434,29 +730,18 @@ function fillSecret(
   }
 }
 
-function isOpenKeyOverlayNode(node: Node): boolean {
-  return (
-    node instanceof HTMLElement &&
-    (node.hasAttribute("data-openkey-icon") ||
-      node.hasAttribute("data-openkey-banner") ||
-      node.hasAttribute("data-openkey-picker"))
-  );
-}
-
-type PickerItem = {
-  id: string;
-  title: string;
-  subtitle?: string;
-};
-
 async function showFillPicker(opts: {
   heading: string;
-  items: PickerItem[];
+  items: PagePickerItem[];
+  anchor?: HTMLElement;
+  variant?: "modal" | "autofill";
 }): Promise<string | null> {
   return showPagePicker({
     heading: opts.heading,
     items: opts.items,
     attr: "data-openkey-picker",
+    anchor: opts.anchor,
+    variant: opts.variant,
   });
 }
 
@@ -467,39 +752,82 @@ async function pickAndFillLogin(
     usernameField?: HTMLInputElement | null;
   },
 ): Promise<void> {
+  const fromField = !!(opts?.passwordField || opts?.usernameField);
   if (!entries.length) return;
-  if (entries.length === 1) {
+  if (!fromField && entries.length === 1) {
     fillEntry(entries[0]!, opts);
     return;
   }
+  const anchor =
+    opts?.passwordField ?? opts?.usernameField ?? loginPickerAnchor();
+  const includeSuggest = shouldSuggestPassword({
+    hasPasswordField: findPasswordFields().length > 0,
+    matchCount: entries.length,
+    hasNewPassword: findPasswordFields().some((p) =>
+      isNewPasswordField({
+        autocomplete: fieldAutocomplete(p),
+        hint: fieldHint(p),
+      }),
+    ),
+  });
+  const items = loginAutofillItems({
+    unlocked: true,
+    entries: entries.map((e) => ({
+      uuid: e.uuid,
+      title: e.title,
+      username: fillUsername(e) || e.username,
+      icon: e.icon,
+      urls: e.urls,
+    })),
+    includeSuggest,
+    ...pageArtwork(),
+  });
   const id = await showFillPicker({
     heading: "Choose a login",
-    items: entries.map((e) => ({
-      id: e.uuid,
-      title: e.title || e.username || "Login",
-      subtitle: fillUsername(e) || e.urls?.[0],
-    })),
+    items,
+    anchor,
+    variant: anchor ? "autofill" : "modal",
   });
+  const field =
+    opts?.passwordField ??
+    opts?.usernameField ??
+    preferredPasswordField();
+  if (field) {
+    await handleLoginPickerChoice(id, entries, field, opts);
+    return;
+  }
   if (!id) return;
+  if (id === AUTOFILL_UNLOCK_ID || id === AUTOFILL_MANAGE_ID) {
+    await openExtensionPopup();
+    return;
+  }
   const entry = entries.find((e) => e.uuid === id);
   if (entry) fillEntry(entry, opts);
 }
 
-async function pickAndFillCard(cards: DecryptedCard[]): Promise<void> {
+async function pickAndFillCard(
+  cards: DecryptedCard[],
+  anchor?: HTMLElement,
+): Promise<void> {
   if (!cards.length) return;
-  if (cards.length === 1) {
+  if (!anchor && cards.length === 1) {
     fillCard(cards[0]!);
     return;
   }
+  const items: PagePickerItem[] = cards.map((c) => ({
+    id: c.uuid,
+    title: c.name || c.holder || "Card",
+    subtitle: c.number
+      ? `•••• ${c.number.replace(/\s/g, "").slice(-4)}`
+      : c.holder,
+    row: "credential",
+    icon: "card",
+  }));
   const id = await showFillPicker({
     heading: "Choose a card",
-    items: cards.map((c) => ({
-      id: c.uuid,
-      title: c.name || c.holder || "Card",
-      subtitle: c.number
-        ? `•••• ${c.number.replace(/\s/g, "").slice(-4)}`
-        : c.holder,
-    })),
+    items,
+    anchor,
+    variant: anchor ? "autofill" : "modal",
   });
   if (!id) return;
   const card = cards.find((c) => c.uuid === id);
@@ -511,17 +839,22 @@ async function pickAndFillSecret(
   tokenField?: HTMLInputElement | HTMLTextAreaElement | null,
 ): Promise<void> {
   if (!secrets.length) return;
-  if (secrets.length === 1) {
+  if (!tokenField && secrets.length === 1) {
     fillSecret(secrets[0]!, { tokenField });
     return;
   }
+  const items: PagePickerItem[] = secrets.map((s) => ({
+    id: s.uuid,
+    title: s.name || "Secret",
+    subtitle: s.username || s.secretKind || undefined,
+    row: "credential",
+    icon: "lock",
+  }));
   const id = await showFillPicker({
     heading: "Choose a secret",
-    items: secrets.map((s) => ({
-      id: s.uuid,
-      title: s.name || "Secret",
-      subtitle: s.username || s.secretKind || undefined,
-    })),
+    items,
+    anchor: tokenField ?? undefined,
+    variant: tokenField ? "autofill" : "modal",
   });
   if (!id) return;
   const secret = secrets.find((s) => s.uuid === id);
@@ -544,14 +877,24 @@ function removeOverlayIcon(icon: OverlayIcon): void {
 }
 
 const visibilityObserver = new IntersectionObserver(
-  () => scheduleOverlaySync(),
+  (entries) => {
+    for (const entry of entries) {
+      const icon = overlayIcons.find((i) => i.field === entry.target);
+      if (!icon) continue;
+      if (!entry.isIntersecting || !icon.field.isConnected) {
+        icon.btn.style.visibility = "hidden";
+        continue;
+      }
+      icon.place();
+    }
+  },
   { root: null, threshold: 0 },
 );
 
 function cleanupOrphanedOverlayIcons(): void {
   for (let i = overlayIcons.length - 1; i >= 0; i--) {
     const icon = overlayIcons[i]!;
-    if (!icon.field.isConnected || !isVisible(icon.field)) {
+    if (!icon.field.isConnected) {
       removeOverlayIcon(icon);
       overlayIcons.splice(i, 1);
     }
@@ -562,6 +905,8 @@ function mountOverlayIcon(opts: {
   field: HTMLInputElement | HTMLTextAreaElement;
   kind: OverlayKind;
   title: string;
+  visual?: PickerVisual | null;
+  unlocked: boolean;
   onClick: () => void | Promise<void>;
 }): void {
   const { field, kind, title, onClick } = opts;
@@ -573,18 +918,50 @@ function mountOverlayIcon(opts: {
         : kind === "card"
           ? "openkeyCardIcon"
           : "openkeyTokenIcon";
-  if (field.dataset[marker] === "1") return;
+  if (field.dataset[marker] === "1") {
+    const existing = overlayIcons.find(
+      (i) => i.field === field && i.kind === kind,
+    );
+    if (existing) {
+      existing.btn.title = title;
+      existing.btn.setAttribute("aria-label", title);
+      const sig = overlayPaintSignature({
+        kind,
+        unlocked: opts.unlocked,
+        title,
+        visual: opts.visual,
+      });
+      if (existing.btn.dataset.openkeyPaint === sig) return;
+      existing.btn.dataset.openkeyPaint = sig;
+      paintOverlayButton(existing.btn, {
+        kind,
+        visual: opts.visual,
+        unlocked: opts.unlocked,
+      });
+    }
+    return;
+  }
   field.dataset[marker] = "1";
+  if (shouldSuppressNativeAutofill(kind)) {
+    applyNativeAutofillSuppress(field);
+  }
 
   const btn = document.createElement("button");
   btn.type = "button";
   btn.title = title;
   btn.setAttribute("data-openkey-icon", kind);
   btn.setAttribute("aria-label", title);
-  styleOverlayButton(btn);
-  btn.appendChild(
-    kind === "card" ? iconCard(15) : kind === "token" ? iconLock(15) : iconKey(15),
-  );
+  paintOverlayButton(btn, {
+    kind,
+    visual: opts.visual,
+    unlocked: opts.unlocked,
+  });
+  btn.dataset.openkeyPaint = overlayPaintSignature({
+    kind,
+    unlocked: opts.unlocked,
+    title,
+    visual: opts.visual,
+  });
 
   const detach = () => {
     const idx = overlayIcons.findIndex((i) => i.btn === btn);
@@ -594,19 +971,18 @@ function mountOverlayIcon(opts: {
   };
 
   const place = () => {
-    if (!field.isConnected || !isVisible(field)) {
+    if (!field.isConnected) {
       detach();
       return;
     }
     const r = field.getBoundingClientRect();
-    // Field may report a rect of 0 when collapsing during SPA transitions.
-    if (r.width < 2 || r.height < 2) {
+    if (!isVisible(field) || r.width < 2 || r.height < 2) {
       btn.style.visibility = "hidden";
       return;
     }
     btn.style.visibility = "visible";
-    btn.style.top = `${r.top + (r.height - 28) / 2}px`;
-    btn.style.left = `${r.right - 34}px`;
+    btn.style.top = `${r.top + (r.height - 32) / 2}px`;
+    btn.style.left = `${r.right - 38}px`;
   };
 
   btn.addEventListener("click", (e) => {
@@ -631,17 +1007,36 @@ function mountOverlayIcon(opts: {
 
 function syncOverlayIcons(): void {
   cleanupOrphanedOverlayIcons();
+  const gen = ++overlaySyncGen;
 
   void (async () => {
     const unlocked = await refreshUnlockState();
-    if (!unlocked) {
-      clearAllOverlayIcons();
-      return;
-    }
-
+    if (gen !== overlaySyncGen) return;
     const tokenFields = findTokenFields();
     const tokenSet = new Set(tokenFields);
     const linkedUsers = new Set<HTMLInputElement>();
+    let loginVisual: PickerVisual | null = null;
+    if (unlocked) {
+      try {
+        const entries = await entriesForOrigin();
+        if (gen !== overlaySyncGen) return;
+        const first = entries[0];
+        if (first) {
+          loginVisual = pickerVisual(
+            {
+              icon: first.icon,
+              title: first.title,
+              urls: first.urls,
+              username: fillUsername(first) || first.username,
+              ...pageArtwork(),
+            },
+            AUTOFILL_ICON_OPTS,
+          );
+        }
+      } catch {
+        loginVisual = null;
+      }
+    }
 
     for (const pwd of findPasswordFields()) {
       if (tokenSet.has(pwd)) continue;
@@ -650,23 +1045,11 @@ function syncOverlayIcons(): void {
       mountOverlayIcon({
         field: pwd,
         kind: "password",
-        title: "Fill with OpenKey",
-        onClick: async () => {
-          const res = await chrome.runtime.sendMessage({
-            type: "ENTRIES_FOR_ORIGIN",
-            origin: location.href,
-          });
-          const entries = (res?.entries ?? []) as DecryptedEntry[];
-          if (!entries.length) {
-            if (!pwd.value) {
-              await offerGeneratePassword(pwd);
-              return;
-            }
-            await notifyEmpty("password");
-            return;
-          }
-          await pickAndFillLogin(entries, { passwordField: pwd });
-        },
+        title: unlocked ? "Fill with OpenKey" : "Unlock OpenKey",
+        visual: loginVisual,
+        unlocked,
+        onClick: () =>
+          openLoginAutofill(pwd, { passwordField: pwd }),
       });
     }
 
@@ -674,19 +1057,11 @@ function syncOverlayIcons(): void {
       mountOverlayIcon({
         field: user,
         kind: "username",
-        title: "Fill username with OpenKey",
-        onClick: async () => {
-          const res = await chrome.runtime.sendMessage({
-            type: "ENTRIES_FOR_ORIGIN",
-            origin: location.href,
-          });
-          const entries = (res?.entries ?? []) as DecryptedEntry[];
-          if (!entries.length) {
-            await notifyEmpty("username");
-            return;
-          }
-          await pickAndFillLogin(entries, { usernameField: user });
-        },
+        title: unlocked ? "Fill username with OpenKey" : "Unlock OpenKey",
+        visual: loginVisual,
+        unlocked,
+        onClick: () =>
+          openLoginAutofill(user, { usernameField: user }),
       });
     }
 
@@ -695,8 +1070,10 @@ function syncOverlayIcons(): void {
       mountOverlayIcon({
         field: numberField,
         kind: "card",
-        title: "Fill card with OpenKey",
+        title: unlocked ? "Fill card with OpenKey" : "Unlock OpenKey",
+        unlocked,
         onClick: async () => {
+          if (!(await promptUnlockIfNeeded(numberField))) return;
           const res = await chrome.runtime.sendMessage({
             type: "LIST_CARDS_FOR_FILL",
           });
@@ -705,7 +1082,7 @@ function syncOverlayIcons(): void {
             await notifyEmpty("card");
             return;
           }
-          await pickAndFillCard(cards);
+          await pickAndFillCard(cards, numberField);
         },
       });
     }
@@ -714,8 +1091,10 @@ function syncOverlayIcons(): void {
       mountOverlayIcon({
         field: tokenField,
         kind: "token",
-        title: "Fill API token with OpenKey",
+        title: unlocked ? "Fill API token with OpenKey" : "Unlock OpenKey",
+        unlocked,
         onClick: async () => {
+          if (!(await promptUnlockIfNeeded(tokenField))) return;
           const res = await chrome.runtime.sendMessage({
             type: "LIST_SECRETS_FOR_FILL",
             origin: location.href,
@@ -733,31 +1112,14 @@ function syncOverlayIcons(): void {
 }
 
 function scheduleOverlaySync(): void {
-  if (overlaySyncQueued || applyingOverlays) return;
+  if (applyingOverlays) return;
+  if (overlaySyncQueued) return;
   overlaySyncQueued = true;
-  requestAnimationFrame(() => {
+  window.setTimeout(() => {
     overlaySyncQueued = false;
     if (applyingOverlays) return;
     syncOverlayIcons();
-  });
-}
-
-function mutationsAffectPageFields(mutations: MutationRecord[]): boolean {
-  for (const m of mutations) {
-    for (const node of m.addedNodes) {
-      if (isOpenKeyOverlayNode(node)) continue;
-      if (node instanceof HTMLInputElement) return true;
-      if (node instanceof Element && node.querySelector?.("input")) return true;
-    }
-    for (const node of m.removedNodes) {
-      if (isOpenKeyOverlayNode(node)) continue;
-      if (node instanceof HTMLInputElement) return true;
-      if (node instanceof Element && node.querySelector?.("input")) return true;
-      // Field gone → drop orphaned icons even if we cannot inspect children.
-      if (overlayIcons.length) return true;
-    }
-  }
-  return false;
+  }, OVERLAY_SYNC_DEBOUNCE_MS);
 }
 
 function dismissKey(username: string, password: string): string {
@@ -786,16 +1148,16 @@ function removeBanner(): void {
   bannerEl = null;
 }
 
-function showBanner(opts: {
-  action: "save" | "update";
+function showSavedNotice(opts: {
+  updated: boolean;
   title: string;
   username: string;
-  password: string;
-  uuid?: string;
 }): void {
   removeBanner();
+  const theme = autofillTheme();
   const root = document.createElement("div");
   root.setAttribute("data-openkey-banner", "1");
+  root.setAttribute("role", "status");
   root.style.cssText = [
     "position:fixed",
     "left:50%",
@@ -804,93 +1166,37 @@ function showBanner(opts: {
     "width:min(360px,calc(100vw - 32px))",
     "z-index:2147483647",
     "display:flex",
-    "flex-wrap:wrap",
     "align-items:center",
     "gap:10px",
     "padding:12px 14px",
-    `background:${OK_BRAND.surface}`,
-    `color:${OK_BRAND.text}`,
-    `font:13px/1.4 ${OK_BRAND.font}`,
+    `background:${theme.surface}`,
+    `color:${theme.text}`,
+    `font:13px/1.4 ${theme.font}`,
     "border-radius:14px",
-    "box-shadow:0 8px 28px rgba(0,0,0,.35)",
-    `border:1px solid ${OK_BRAND.border}`,
+    `box-shadow:${theme.shadow}`,
+    `border:1px solid ${theme.outline}`,
     "box-sizing:border-box",
   ].join(";");
 
   const mark = document.createElement("div");
-  mark.style.cssText = `display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:${OK_BRAND.primary};color:#fff;flex-shrink:0`;
+  mark.style.cssText = `display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:${theme.primary};color:${theme.onPrimary};flex-shrink:0`;
   mark.appendChild(iconKey(15));
 
   const text = document.createElement("div");
   text.style.cssText = "flex:1;min-width:160px";
-  const verb = opts.action === "update" ? "Update" : "Save";
-  text.innerHTML = `<strong style="display:block;margin-bottom:2px">${verb} password in OpenKey?</strong>
+  const heading = opts.updated ? "Password updated" : "Password saved";
+  text.innerHTML = `<strong style="display:block;margin-bottom:2px">${heading} in OpenKey</strong>
     <span style="opacity:.85">${escapeHtml(opts.title)}${
       opts.username ? ` · ${escapeHtml(opts.username)}` : ""
     }</span>`;
 
-  const actions = document.createElement("div");
-  actions.style.cssText = "display:flex;gap:8px;flex-shrink:0";
-
-  const dismissBtn = document.createElement("button");
-  dismissBtn.type = "button";
-  dismissBtn.textContent = "Not now";
-  styleGhostButton(dismissBtn);
-  dismissBtn.addEventListener("click", () => {
-    dismissed.add(dismissKey(opts.username, opts.password));
-    removeBanner();
-  });
-
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "button";
-  saveBtn.textContent = opts.action === "update" ? "Update" : "Save";
-  stylePrimaryButton(saveBtn);
-  saveBtn.addEventListener("click", async () => {
-    saveBtn.disabled = true;
-    dismissBtn.disabled = true;
-    saveBtn.textContent = "…";
-    const message =
-      opts.action === "update"
-        ? {
-            type: "UPDATE_LOGIN",
-            uuid: opts.uuid,
-            username: opts.username,
-            password: opts.password,
-            url: location.href,
-            title: opts.title,
-          }
-        : {
-            type: "SAVE_LOGIN",
-            username: opts.username,
-            password: opts.password,
-            url: location.href,
-            title: opts.title,
-          };
-    try {
-      const res = (await chrome.runtime.sendMessage(message)) as SaveResponse;
-      if (!res?.ok) {
-        saveBtn.disabled = false;
-        dismissBtn.disabled = false;
-        saveBtn.textContent = opts.action === "update" ? "Update" : "Save";
-        text.querySelector("span")!.textContent =
-          res?.error ?? "Could not save — unlock OpenKey";
-        return;
-      }
-      dismissed.add(dismissKey(opts.username, opts.password));
-      removeBanner();
-    } catch (e) {
-      saveBtn.disabled = false;
-      dismissBtn.disabled = false;
-      saveBtn.textContent = opts.action === "update" ? "Update" : "Save";
-      text.querySelector("span")!.textContent =
-        e instanceof Error ? e.message : "Could not save";
-    }
-  });
-
-  actions.append(dismissBtn, saveBtn);
-  root.append(mark, text, actions);
+  root.append(mark, text);
+  stampOpenKeyUiTree(root);
   document.documentElement.appendChild(root);
   bannerEl = root;
+  window.setTimeout(() => {
+    if (bannerEl === root) removeBanner();
+  }, 3600);
 }
 
 function escapeHtml(s: string): string {
@@ -924,19 +1230,23 @@ async function maybeOfferSave(): Promise<void> {
       username: login.username,
       password: login.password,
       url: location.href,
+      pageIconUrl: documentFaviconUrl(document),
     })) as CaptureResponse;
     if (!res || res.action === "none") return;
     if (res.action === "need_unlock") {
       showPageToast("Unlock OpenKey to save this password");
       return;
     }
-    if (res.action === "save" || res.action === "update") {
-      showBanner({
-        action: res.action,
+    if (res.action === "error") {
+      showPageToast(res.error ?? "Could not save password");
+      return;
+    }
+    if (res.action === "saved" || res.action === "updated") {
+      dismissed.add(key);
+      showSavedNotice({
+        updated: res.action === "updated",
         title: res.title || suggestedTitle(),
         username: login.username,
-        password: login.password,
-        uuid: res.uuid,
       });
     }
   } catch {
@@ -962,6 +1272,51 @@ function isSubmitControl(el: EventTarget | null): boolean {
   const combined = `${text} ${aria}`;
   return /log\s*in|sign\s*in|sign\s*up|submit|continue|next|تسجيل|دخول/.test(
     combined,
+  );
+}
+
+function isLoginAutofillTarget(el: EventTarget | null): el is HTMLInputElement {
+  if (
+    !(el instanceof HTMLInputElement) ||
+    !isVisible(el) ||
+    isAutofillIgnored(el)
+  ) {
+    return false;
+  }
+  if (el.closest("[data-openkey-picker],[data-openkey-icon]")) return false;
+  if (el.type === "password") {
+    return !isLikelyTokenField(fieldHint(el));
+  }
+  return isLikelyUsernameField({
+    type: el.type,
+    autocomplete: fieldAutocomplete(el),
+    hint: fieldHint(el),
+  });
+}
+
+function installAutofillFocus(): void {
+  injectNativeAutofillHideStyle();
+  document.addEventListener(
+    "pointerdown",
+    (e) => {
+      const t = e.target;
+      if (!isLoginAutofillTarget(t)) return;
+      applyNativeAutofillSuppress(t, { armNow: true });
+    },
+    true,
+  );
+  document.addEventListener(
+    "focusin",
+    (e) => {
+      const t = e.target;
+      if (!isLoginAutofillTarget(t)) return;
+      applyNativeAutofillSuppress(t);
+      void openLoginAutofill(
+        t,
+        t.type === "password" ? { passwordField: t } : { usernameField: t },
+      );
+    },
+    true,
   );
 }
 
@@ -1001,9 +1356,7 @@ function installCaptureListeners(): void {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "OPENKEY_SESSION") {
-    vaultUnlocked = !!message.unlocked;
-    unlockCheckedAt = Date.now();
-    scheduleOverlaySync();
+    applySessionUnlock(!!message.unlocked);
     return;
   }
   if (message.type === "OPENKEY_TOAST" && typeof message.message === "string") {
@@ -1032,11 +1385,26 @@ chrome.runtime.onMessage.addListener((message) => {
         const id = await showFillPicker({
           heading:
             field === "password" ? "Copy password from" : "Copy username from",
-          items: entries.map((e) => ({
-            id: e.uuid,
-            title: e.title || e.username || "Login",
-            subtitle: fillUsername(e) || e.urls?.[0],
-          })),
+          items: entries.map((e) => {
+            const visual = pickerVisual(
+              { ...e, ...pageArtwork() },
+              AUTOFILL_ICON_OPTS,
+            );
+            return {
+              id: e.uuid,
+              title: fillUsername(e) || e.title || "Login",
+              subtitle:
+                field === "password"
+                  ? "••••••••"
+                  : fillUsername(e) || e.urls?.[0],
+              row: "credential" as const,
+              icon: "key" as const,
+              imageSrc: visual.imageSrc,
+              glyphPath: visual.glyphPath,
+              backdrop: visual.backdrop,
+              masked: field === "password",
+            };
+          }),
         });
         if (!id) return;
         entry = entries.find((e) => e.uuid === id)!;
@@ -1086,8 +1454,11 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
+watchExtensionSession();
+void bootstrapUnlockState();
 syncOverlayIcons();
 installCaptureListeners();
+installAutofillFocus();
 const observer = new MutationObserver((mutations) => {
   if (applyingOverlays) return;
   if (!mutationsAffectPageFields(mutations)) return;
@@ -1098,5 +1469,7 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 // SPA navigations / bfcache may leave orphaned overlays behind.
 window.addEventListener("pageshow", () => scheduleOverlaySync());
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") scheduleOverlaySync();
+  if (document.visibilityState === "visible") {
+    void refreshUnlockState(true).then(() => scheduleOverlaySync());
+  }
 });

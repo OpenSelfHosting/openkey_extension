@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OpenKey",
-  "version": "0.1.4",
+  "version": "0.1.18",
   "description": "Self-hosted end-to-end encrypted password manager autofill",
   "homepage_url": "https://openkey.openselfhosting.com",
   "icons": {
@@ -18,7 +18,8 @@
     "nativeMessaging",
     "alarms",
     "clipboardWrite",
-    "clipboardRead"
+    "clipboardRead",
+    "notifications"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -54,7 +55,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/passkey/page-script.js"],
+      "resources": ["src/passkey/page-script.js", "brands/*", "icons/*"],
       "matches": ["<all_urls>"]
     }
   ],

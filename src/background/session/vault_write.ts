@@ -17,6 +17,7 @@ import {
   nativeRequest,
   type NativeLoginPayload,
 } from "../../native/bridge";
+import { normalizeFolderId } from "../../shared/vault_scope";
 import { syncPushEntries, syncWith } from "../../sync/api";
 import { applySyncResult } from "./sync";
 import {
@@ -39,18 +40,24 @@ import type {
 } from "../../shared/types";
 import {
   ReservedCollections,
-  isReservedCollection,
   normalizeSecretKind,
 } from "../../shared/types";
 import {
+  normalizeCard,
+  normalizeCrypto,
   normalizeSecret,
   secretKindLabelFallback,
   titleFromUrl,
   urlsFor,
 } from "./mapping";
 import { isUnlocked } from "./auth";
-import { decryptLocalEntries } from "./vault_read";
+import {
+  decryptLocalEntries,
+  decideCapture,
+  listDecryptedCollections,
+} from "./vault_read";
 import { getSession, vaultKeyFromSession } from "./state";
+import { resolveIconForLogin } from "../../shared/favicon_icon";
 
 export async function preferNativeWrite(): Promise<boolean> {
   const session = await getSession();
@@ -58,6 +65,22 @@ export async function preferNativeWrite(): Promise<boolean> {
   const settings = await getSettings();
   if (!settings.preferNativeBridge) return false;
   return tryNativePing();
+}
+
+async function withResolvedLoginIcon(
+  payload: NativeLoginPayload,
+  extra?: { pageUrl?: string; pageIconUrl?: string },
+): Promise<NativeLoginPayload> {
+  const icon = await resolveIconForLogin({
+    title: payload.title,
+    urls: payload.urls,
+    username: payload.username,
+    pageUrl: extra?.pageUrl ?? payload.urls[0],
+    pageIconUrl: extra?.pageIconUrl,
+    existingIcon: payload.icon,
+  });
+  if (!icon) return payload;
+  return { ...payload, icon };
 }
 
 async function createStandaloneEntry(
@@ -72,6 +95,7 @@ async function createStandaloneEntry(
     password: payload.password,
     urls: payload.urls,
     notes: "",
+    icon: payload.icon,
   };
   const stored: StoredEntry = {
     uuid,
@@ -141,14 +165,18 @@ export async function saveLogin(input: {
   password: string;
   url: string;
   title?: string;
+  pageIconUrl?: string;
 }): Promise<void> {
   if (!input.password) throw new Error("Password required");
-  const entry: NativeLoginPayload = {
-    title: input.title?.trim() || titleFromUrl(input.url),
-    username: input.username.trim(),
-    password: input.password,
-    urls: urlsFor(input.url),
-  };
+  const entry = await withResolvedLoginIcon(
+    {
+      title: input.title?.trim() || titleFromUrl(input.url),
+      username: input.username.trim(),
+      password: input.password,
+      urls: urlsFor(input.url),
+    },
+    { pageUrl: input.url, pageIconUrl: input.pageIconUrl },
+  );
 
   if (await preferNativeWrite()) {
     const res = await nativeRequest({ type: "createEntry", entry }, 8000);
@@ -238,6 +266,7 @@ export async function createStandaloneEntryFull(
     urls: payload.urls,
     notes: payload.notes ?? "",
     passkey: payload.passkey ?? null,
+    icon: payload.icon,
   };
   const stored: StoredEntry = {
     uuid,
@@ -270,6 +299,7 @@ export async function updateStandaloneEntryFull(
     urls: payload.urls,
     notes: payload.notes ?? "",
     passkey: payload.passkey ?? null,
+    icon: payload.icon,
   };
   let revision = 1;
   let collectionUuid: string | null = null;
@@ -286,6 +316,7 @@ export async function updateStandaloneEntryFull(
         urls: payload.urls.length ? payload.urls : prev.urls,
         notes: payload.notes ?? prev.notes,
         passkey: payload.passkey !== undefined ? payload.passkey : prev.passkey,
+        icon: payload.icon || prev.icon,
       };
     } catch {
       /* replace */
@@ -309,38 +340,6 @@ export async function updateStandaloneEntryFull(
   }
 }
 
-
-export async function listDecryptedCollections(): Promise<DecryptedCollection[]> {
-  if (!(await isUnlocked())) return [];
-  const session = await getSession();
-  if (session.mode === "native") {
-    // Desktop bridge does not expose folders yet — flat vault in native mode.
-    return [];
-  }
-  const key = await vaultKeyFromSession();
-  const rows = await listCollections();
-  const out: DecryptedCollection[] = [];
-  for (const row of rows) {
-    if (row.isDeleted || isReservedCollection(row.uuid)) continue;
-    let name = "Folder";
-    try {
-      name = decryptString(key, row.encryptedName) || name;
-    } catch {
-      /* keep placeholder */
-    }
-    out.push({
-      uuid: row.uuid,
-      name,
-      icon: row.icon || "folder",
-      color: row.color,
-      parentUuid: row.parentUuid,
-      sortOrder: row.sortOrder,
-    });
-  }
-  return out.sort(
-    (a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name),
-  );
-}
 
 export async function pushStored(stored: StoredEntry): Promise<void> {
   await upsertEntries([{ ...stored, isSynced: false }]);
@@ -367,6 +366,13 @@ export async function upsertLoginEntry(input: {
     urls: input.payload.urls ?? [],
     notes: input.payload.notes ?? "",
   };
+  const resolvedIcon = await resolveIconForLogin({
+    title: payload.title,
+    urls: payload.urls,
+    username: payload.username,
+    existingIcon: payload.icon,
+  });
+  if (resolvedIcon) payload.icon = resolvedIcon;
 
   if (session.mode === "native" || (await preferNativeWrite())) {
     const nativePayload: NativeLoginPayload = {
@@ -376,6 +382,7 @@ export async function upsertLoginEntry(input: {
       urls: payload.urls,
       notes: payload.notes,
       passkey: payload.passkey,
+      icon: payload.icon,
     };
     if (input.uuid) {
       const res = await nativeRequest(
@@ -459,10 +466,6 @@ export async function upsertCardEntry(input: {
 }): Promise<DecryptedCard> {
   if (!(await isUnlocked())) throw new Error("Vault locked");
   const session = await getSession();
-  if (session.mode === "native") {
-    throw new Error("Edit cards in the OpenKey desktop app");
-  }
-  const key = await vaultKeyFromSession();
   const payload: CardPayload = {
     ...input.payload,
     type: "card",
@@ -472,6 +475,37 @@ export async function upsertCardEntry(input: {
     expiry: input.payload.expiry ?? "",
     cvc: input.payload.cvc ?? "",
   };
+  if (session.mode === "native") {
+    const card = {
+      name: payload.name,
+      holder: payload.holder,
+      number: payload.number,
+      expiry: payload.expiry,
+      cvc: payload.cvc,
+      brand: payload.brand,
+      notes: payload.notes,
+      bank: payload.bank,
+    };
+    const res = input.uuid
+      ? await nativeRequest({ type: "updateCard", uuid: input.uuid, card }, 8000)
+      : await nativeRequest({ type: "createCard", card }, 8000);
+    if (!res.ok) {
+      throw new Error(
+        ("error" in res ? res.error : null) || "Native card save failed",
+      );
+    }
+    const saved =
+      "card" in res && res.card ? (res.card as DecryptedCard) : undefined;
+    return normalizeCard(
+      {
+        uuid: saved?.uuid ?? input.uuid ?? crypto.randomUUID(),
+        collectionUuid: ReservedCollections.wallets,
+        revision: saved?.revision ?? 1,
+      },
+      { ...payload, ...saved, type: "card" },
+    );
+  }
+  const key = await vaultKeyFromSession();
   const uuid = input.uuid ?? crypto.randomUUID();
   let revision = 1;
   if (input.uuid) {
@@ -503,10 +537,6 @@ export async function upsertCryptoEntry(input: {
 }): Promise<DecryptedCrypto> {
   if (!(await isUnlocked())) throw new Error("Vault locked");
   const session = await getSession();
-  if (session.mode === "native") {
-    throw new Error("Edit crypto wallets in the OpenKey desktop app");
-  }
-  const key = await vaultKeyFromSession();
   const payload: CryptoPayload = {
     ...input.payload,
     type: "crypto",
@@ -514,6 +544,41 @@ export async function upsertCryptoEntry(input: {
     network: input.payload.network ?? "",
     address: input.payload.address ?? "",
   };
+  if (session.mode === "native") {
+    const wallet = {
+      name: payload.name,
+      network: payload.network,
+      address: payload.address,
+      privateKey: payload.privateKey,
+      seedPhrase: payload.seedPhrase,
+      notes: payload.notes,
+      folder: payload.folder,
+    };
+    const res = input.uuid
+      ? await nativeRequest(
+          { type: "updateCrypto", uuid: input.uuid, wallet },
+          8000,
+        )
+      : await nativeRequest({ type: "createCrypto", wallet }, 8000);
+    if (!res.ok) {
+      throw new Error(
+        ("error" in res ? res.error : null) || "Native wallet save failed",
+      );
+    }
+    const saved =
+      "wallet" in res && res.wallet
+        ? (res.wallet as DecryptedCrypto)
+        : undefined;
+    return normalizeCrypto(
+      {
+        uuid: saved?.uuid ?? input.uuid ?? crypto.randomUUID(),
+        collectionUuid: ReservedCollections.crypto,
+        revision: saved?.revision ?? 1,
+      },
+      { ...payload, ...saved, type: "crypto" },
+    );
+  }
+  const key = await vaultKeyFromSession();
   const uuid = input.uuid ?? crypto.randomUUID();
   let revision = 1;
   if (input.uuid) {
@@ -545,10 +610,6 @@ export async function upsertSecretEntry(input: {
 }): Promise<DecryptedSecret> {
   if (!(await isUnlocked())) throw new Error("Vault locked");
   const session = await getSession();
-  if (session.mode === "native") {
-    throw new Error("Edit secrets in the OpenKey desktop app");
-  }
-  const key = await vaultKeyFromSession();
   const secretKind = normalizeSecretKind(input.payload.kind);
   const payload: SecretPayload = {
     type: "secret",
@@ -562,6 +623,54 @@ export async function upsertSecretEntry(input: {
     notes: input.payload.notes ?? "",
     device: input.payload.device ?? "",
   };
+  if (session.mode === "native") {
+    const secret = {
+      name: payload.name,
+      kind: secretKind,
+      username: payload.username,
+      host: payload.host,
+      publicKey: payload.publicKey,
+      secret: payload.secret,
+      passphrase: payload.passphrase,
+      notes: payload.notes,
+      device: payload.device,
+    };
+    const res = input.uuid
+      ? await nativeRequest(
+          { type: "updateSecret", uuid: input.uuid, secret },
+          8000,
+        )
+      : await nativeRequest({ type: "createSecret", secret }, 8000);
+    if (!res.ok) {
+      throw new Error(
+        ("error" in res ? res.error : null) || "Native secret save failed",
+      );
+    }
+    const saved =
+      "secret" in res && res.secret
+        ? (res.secret as DecryptedSecret)
+        : undefined;
+    return normalizeSecret(
+      {
+        uuid: saved?.uuid ?? input.uuid ?? crypto.randomUUID(),
+        collectionUuid: ReservedCollections.secrets,
+        revision: saved?.revision ?? 1,
+      },
+      {
+        ...payload,
+        name: saved?.name ?? payload.name,
+        kind: saved?.secretKind ?? payload.kind,
+        username: saved?.username ?? payload.username,
+        host: saved?.host ?? payload.host,
+        publicKey: saved?.publicKey ?? payload.publicKey,
+        secret: saved?.secret ?? payload.secret,
+        passphrase: saved?.passphrase ?? payload.passphrase,
+        notes: saved?.notes ?? payload.notes,
+        device: saved?.device ?? payload.device,
+      },
+    );
+  }
+  const key = await vaultKeyFromSession();
   const uuid = input.uuid ?? crypto.randomUUID();
   let revision = 1;
   if (input.uuid) {
@@ -604,8 +713,27 @@ export async function deleteVaultEntry(
       }
       return;
     }
-    if (opts?.kind === "card" || opts?.kind === "crypto") {
-      throw new Error("Delete this item in the OpenKey desktop app");
+    if (opts?.kind === "card") {
+      const cardRes = await nativeRequest({ type: "deleteCard", uuid }, 8000);
+      if (!cardRes.ok) {
+        throw new Error(
+          ("error" in cardRes ? cardRes.error : null) || "Native delete failed",
+        );
+      }
+      return;
+    }
+    if (opts?.kind === "crypto") {
+      const cryptoRes = await nativeRequest(
+        { type: "deleteCrypto", uuid },
+        8000,
+      );
+      if (!cryptoRes.ok) {
+        throw new Error(
+          ("error" in cryptoRes ? cryptoRes.error : null) ||
+            "Native delete failed",
+        );
+      }
+      return;
     }
     const res = await nativeRequest({ type: "deleteEntry", uuid }, 8000);
     if (!res.ok) {
@@ -759,7 +887,7 @@ export async function createFolder(input: {
     encryptedName: encryptString(key, name),
     icon: "folder",
     color: null,
-    parentUuid: input.parentUuid ?? null,
+    parentUuid: normalizeFolderId(input.parentUuid),
     sortOrder: Date.now(),
     revision: 1,
     isDeleted: false,
@@ -850,5 +978,54 @@ export async function exportVault(
   const entries = await decryptLocalEntries();
   const collections = await listDecryptedCollections();
   return buildExport(format, entries, collections);
+}
+
+export type CapturePersistResult =
+  | { action: "none" }
+  | { action: "need_unlock" }
+  | { action: "saved"; title: string }
+  | { action: "updated"; title: string; uuid: string }
+  | { action: "error"; error: string };
+
+/** Decide and immediately persist a captured page login. */
+export async function persistCapturedLogin(input: {
+  username: string;
+  password: string;
+  url: string;
+  pageIconUrl?: string;
+}): Promise<CapturePersistResult> {
+  const decision = await decideCapture(input);
+  if (decision.action === "none" || decision.action === "need_unlock") {
+    return decision;
+  }
+  try {
+    if (decision.action === "save") {
+      await saveLogin({
+        username: input.username,
+        password: input.password,
+        url: input.url,
+        title: decision.title,
+        pageIconUrl: input.pageIconUrl,
+      });
+      return { action: "saved", title: decision.title };
+    }
+    await updateLogin({
+      uuid: decision.uuid,
+      username: input.username,
+      password: input.password,
+      url: input.url,
+      title: decision.title,
+    });
+    return {
+      action: "updated",
+      title: decision.title,
+      uuid: decision.uuid,
+    };
+  } catch (e) {
+    return {
+      action: "error",
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
 }
 

@@ -12,7 +12,7 @@ import {
   decryptLocalCrypto,
   decryptLocalSecrets,
   secretsForOrigin,
-  decideCapture,
+  persistCapturedLogin,
   saveLogin,
   updateLogin,
   preparePasskeyCreate,
@@ -29,6 +29,7 @@ import {
   loadPendingInvites,
   acceptPendingInvite,
   listDecryptedCollections,
+  listVaultSnapshot,
   upsertLoginEntry,
   upsertCardEntry,
   upsertCryptoEntry,
@@ -53,6 +54,7 @@ import {
   moveLoginToFolder,
   scheduleAutoLock,
   syncActionBadge,
+  exposeSessionToPages,
 } from "./session";
 import {
   generatePassword,
@@ -76,7 +78,7 @@ import type { ExportFormat } from "../shared/import_export";
 import { generateTotp } from "../shared/totp";
 import { getSession } from "./session/state";
 
-void syncActionBadge();
+void exposeSessionToPages().then(() => syncActionBadge());
 
 /** Attach a current TOTP code so content scripts can fill OTP fields. */
 function withTotp(entry: DecryptedEntry): DecryptedEntry & { totpCode?: string } {
@@ -102,6 +104,26 @@ async function toastInTab(tabId: number, message: string): Promise<void> {
     });
   } catch {
     /* no content script */
+  }
+}
+
+async function notifyLoginPersisted(
+  title: string,
+  updated: boolean,
+): Promise<void> {
+  const message = updated
+    ? `Password updated for ${title}`
+    : `Password saved for ${title}`;
+  try {
+    if (!chrome.notifications?.create) return;
+    await chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icons/icon48.png",
+      title: "OpenKey",
+      message,
+    });
+  } catch {
+    /* optional; in-page toast still fires from the content script */
   }
 }
 
@@ -218,7 +240,7 @@ async function fillSecretInTab(tabId: number, url: string): Promise<void> {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  void syncActionBadge();
+  void exposeSessionToPages().then(() => syncActionBadge());
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "openkey-fill",
@@ -310,6 +332,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
           break;
         }
+        case "OPEN_POPUP": {
+          let opened = false;
+          try {
+            if (typeof chrome.action?.openPopup === "function") {
+              await chrome.action.openPopup();
+              opened = true;
+            }
+          } catch {
+            opened = false;
+          }
+          if (!opened) {
+            try {
+              await chrome.windows.create({
+                url: chrome.runtime.getURL("src/popup/popup.html"),
+                type: "popup",
+                width: 400,
+                height: 640,
+                focused: true,
+              });
+              opened = true;
+            } catch {
+              opened = false;
+            }
+          }
+          sendResponse({ ok: true, opened });
+          break;
+        }
         case "UNLOCK":
           await unlockStandalone(
             message.email,
@@ -349,6 +398,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "SYNC":
           await syncNow();
           sendResponse({ ok: true });
+          break;
+        case "LIST_VAULT":
+          sendResponse(await listVaultSnapshot());
           break;
         case "LIST_ENTRIES":
           sendResponse({ entries: await decryptLocalEntries() });
@@ -635,21 +687,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case "GET_SETTINGS":
           sendResponse({ settings: await getSettings() });
           break;
-        case "CAPTURED_LOGIN":
-          sendResponse(
-            await decideCapture({
-              username: String(message.username ?? ""),
-              password: String(message.password ?? ""),
-              url: String(message.url ?? sender.tab?.url ?? ""),
-            }),
-          );
+        case "CAPTURED_LOGIN": {
+          const result = await persistCapturedLogin({
+            username: String(message.username ?? ""),
+            password: String(message.password ?? ""),
+            url: String(message.url ?? sender.tab?.url ?? ""),
+            pageIconUrl: message.pageIconUrl
+              ? String(message.pageIconUrl)
+              : undefined,
+          });
+          if (result.action === "saved" || result.action === "updated") {
+            await notifyLoginPersisted(
+              result.title,
+              result.action === "updated",
+            );
+          }
+          sendResponse(result);
           break;
+        }
         case "SAVE_LOGIN":
           await saveLogin({
             username: String(message.username ?? ""),
             password: String(message.password ?? ""),
             url: String(message.url ?? sender.tab?.url ?? ""),
             title: message.title ? String(message.title) : undefined,
+            pageIconUrl: message.pageIconUrl
+              ? String(message.pageIconUrl)
+              : undefined,
           });
           sendResponse({ ok: true });
           break;

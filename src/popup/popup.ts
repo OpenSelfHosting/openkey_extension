@@ -20,6 +20,7 @@ import {
 } from "../shared/types";
 import { generateTotp } from "../shared/totp";
 import { copyText } from "../shared/clipboard";
+import { entryIconHtml, wireEntryIconImages } from "../shared/entry_icon";
 import { vaultEmptyMessage } from "../shared/empty_copy";
 import type { InviteRecord, ShareRecord } from "../sync/api";
 import type { OrgSummary } from "../background/session";
@@ -39,6 +40,16 @@ import {
   skeletonList,
   spacedCardNumber,
 } from "./list_utils";
+import {
+  childFolders,
+  countEntriesInFolder,
+  entriesCountLabel,
+  entriesInFolder,
+  entryMatchesQuery,
+  entryMatchesTags,
+  folderMatchesQuery,
+  folderStackTo,
+} from "../shared/vault_scope";
 import {
   applyFont,
   applyLocale,
@@ -66,11 +77,11 @@ import {
 } from "./pages";
 import type { ExportFormat } from "../shared/import_export";
 
-const lockedHeader = document.getElementById("lockedHeader")!;
 const lockedView = document.getElementById("lockedView")!;
 const unlockedView = document.getElementById("unlockedView")!;
 const errorEl = document.getElementById("error")!;
 const listEl = document.getElementById("list")!;
+const filterBar = document.getElementById("filterBar")!;
 const cardsGrid = document.getElementById("cardsGrid")!;
 const settingsPanel = document.getElementById("settingsPanel")!;
 const subPanel = document.getElementById("subPanel")!;
@@ -88,9 +99,11 @@ const toastHost = document.getElementById("toastHost")!;
 const loadingOverlay = document.getElementById("loadingOverlay")!;
 const fabBtn = document.getElementById("fabBtn") as HTMLButtonElement;
 
-type Tab = "vault" | "cards" | "crypto" | "secrets" | "settings";
+type Tab = "vault" | "items" | "settings";
+type ItemsSection = "cards" | "crypto" | "secrets";
 
 let tab: Tab = "vault";
+let itemsSection: ItemsSection | null = null;
 let settingsSub: SettingsSub = null;
 let searching = false;
 let logins: DecryptedEntry[] = [];
@@ -126,7 +139,7 @@ let sessionMode: "standalone" | "native" | null = null;
 let highContrast = false;
 let fontId = "system";
 let sortMode: "name" | "recent" = "name";
-let activeTag: string | null = null;
+let filterTags: string[] = [];
 let activeCardBrand: string | null = null;
 let activeCryptoNetwork: string | null = null;
 let activeSecretKind: string | null = null;
@@ -257,7 +270,6 @@ async function send<T = Record<string, unknown>>(
 
 function showUnlocked(on: boolean) {
   lockedView.hidden = on;
-  lockedHeader.hidden = on;
   unlockedView.hidden = !on;
 }
 
@@ -354,16 +366,46 @@ function openEditor(next: EditorState) {
 }
 
 function updateFab() {
-  const nativeBlocksCreate =
-    sessionMode === "native" &&
-    (tab === "cards" || tab === "crypto" || tab === "secrets");
   const show =
     !detail &&
     !settingsSub &&
     !searching &&
-    !nativeBlocksCreate &&
-    (tab === "vault" || tab === "cards" || tab === "crypto" || tab === "secrets");
+    (tab === "vault" || (tab === "items" && itemsSection !== null));
   fabBtn.hidden = !show;
+}
+
+function syncNestedShell() {
+  const nested =
+    !detail &&
+    (!!settingsSub || (tab === "items" && itemsSection !== null));
+  unlockedView.classList.toggle("nested-open", nested);
+}
+
+function itemsPageTitle(): string {
+  if (itemsSection === "cards") return "Cards";
+  if (itemsSection === "crypto") return "Crypto";
+  if (itemsSection === "secrets") return "Secrets";
+  return "Items";
+}
+
+function itemsSearchPlaceholder(): string {
+  if (itemsSection === "cards") return "Search cards";
+  if (itemsSection === "crypto") return "Search crypto wallets";
+  if (itemsSection === "secrets") return "Search secrets";
+  return "Search";
+}
+
+function itemsCountLabel(count: number, empty: string): string {
+  return count === 0 ? empty : `${count} saved`;
+}
+
+function setItemsSection(section: ItemsSection | null) {
+  itemsSection = section;
+  if (searching) setSearching(false);
+  else {
+    updatePageChrome();
+    render();
+  }
 }
 
 function setLeadingBack(handler: () => void) {
@@ -390,20 +432,12 @@ function showDetailChrome() {
     pageActions.appendChild(editBtn);
   }
   editBtn.hidden = false;
-  if (sessionMode === "native" && detail && detail.kind !== "login") {
-    // Card / crypto / secret writes are desktop-app only in native mode.
-    editBtn.hidden = true;
-  }
   const folderBtn = document.getElementById("folderToggle");
   if (folderBtn) (folderBtn as HTMLButtonElement).hidden = true;
   const sortBtn = document.getElementById("sortToggle");
   if (sortBtn) (sortBtn as HTMLButtonElement).hidden = true;
   editBtn.onclick = () => {
     if (!detail) return;
-    if (sessionMode === "native" && detail.kind !== "login") {
-      showToast("Edit this item in the OpenKey desktop app", "info");
-      return;
-    }
     if (detail.kind === "login") {
       openEditor({
         kind: "login",
@@ -484,16 +518,12 @@ function updatePageChrome() {
     vault: currentFolderUuid
       ? folderStack[folderStack.length - 1]?.name || "Folder"
       : "Vault",
-    cards: "Payment cards",
-    crypto: "Crypto wallets",
-    secrets: "Developer secrets",
+    items: itemsPageTitle(),
     settings: "Settings",
   };
   const placeholders: Record<Tab, string> = {
     vault: "Search passwords",
-    cards: "Search cards",
-    crypto: "Search crypto wallets",
-    secrets: "Search secrets",
+    items: itemsSearchPlaceholder(),
     settings: "Search",
   };
 
@@ -513,6 +543,7 @@ function updatePageChrome() {
         detail.secret.name || secretKindLabel(detail.secret.secretKind);
     }
     showDetailChrome();
+    syncNestedShell();
     updateFab();
     return;
   }
@@ -555,6 +586,7 @@ function updatePageChrome() {
   if (settingsSub) {
     pageTitle.textContent = subTitles[settingsSub] ?? "Settings";
     showSubBackAction();
+    syncNestedShell();
     updateFab();
     return;
   }
@@ -574,14 +606,31 @@ function updatePageChrome() {
     shareToggle.hidden = true;
     pageActions.hidden = false;
     wireVaultToolbar();
-    updateFab();
     searchEl.placeholder = placeholders[tab];
+    syncNestedShell();
+    updateFab();
+    return;
+  }
+
+  if (tab === "items" && itemsSection) {
+    pageTitle.textContent = titles.items;
+    setLeadingBack(() => setItemsSection(null));
+    searchToggle.hidden = false;
+    shareToggle.hidden = true;
+    pageActions.hidden = false;
+    const folderBtn = document.getElementById("folderToggle");
+    if (folderBtn) (folderBtn as HTMLButtonElement).hidden = true;
+    const sortBtn = document.getElementById("sortToggle");
+    if (sortBtn) (sortBtn as HTMLButtonElement).hidden = true;
+    searchEl.placeholder = placeholders.items;
+    syncNestedShell();
+    updateFab();
     return;
   }
 
   pageTitle.textContent = titles[tab];
   restoreSearchAction();
-  const showSearch = tab !== "settings";
+  const showSearch = tab === "vault";
   pageActions.hidden = !showSearch;
   searchToggle.hidden = !showSearch;
   shareToggle.hidden = true;
@@ -589,6 +638,7 @@ function updatePageChrome() {
   wireVaultToolbar();
 
   searchEl.placeholder = placeholders[tab];
+  syncNestedShell();
   updateFab();
 }
 
@@ -645,6 +695,7 @@ function wireVaultToolbar() {
 
 function setTab(next: Tab) {
   tab = next;
+  itemsSection = null;
   settingsSub = null;
   editor = null;
   selectedOrg = null;
@@ -677,6 +728,8 @@ function clearPanels() {
   cardsGrid.innerHTML = "";
   settingsPanel.innerHTML = "";
   subPanel.innerHTML = "";
+  filterBar.innerHTML = "";
+  filterBar.hidden = true;
   listEl.hidden = true;
   cardsGrid.hidden = true;
   settingsPanel.hidden = true;
@@ -761,16 +814,19 @@ function render() {
   }
 
   if (tab === "vault") renderVault(q);
-  else if (tab === "cards") renderCards(q);
-  else if (tab === "crypto") renderCrypto(q);
-  else if (tab === "secrets") renderSecrets(q);
-  else renderSettings();
+  else if (tab === "items") {
+    if (itemsSection === "cards") renderCards(q);
+    else if (itemsSection === "crypto") renderCrypto(q);
+    else if (itemsSection === "secrets") renderSecrets(q);
+    else renderItemsHub();
+  } else renderSettings();
 
   wireListKeyboardTargets();
 }
 
 function wireListKeyboardTargets(): void {
   listEl.querySelectorAll<HTMLElement>(":scope > li").forEach((li) => {
+    if (li.classList.contains("section-label")) return;
     if (!li.hasAttribute("tabindex")) li.tabIndex = 0;
     if (!li.getAttribute("role")) li.setAttribute("role", "button");
   });
@@ -807,6 +863,7 @@ async function paintDetail() {
       allowManage: sessionMode !== "native",
       allowDelete: true,
     });
+    wireEntryIconImages(detailPage);
     wireLoginDetail(entry, files);
     stopTotpTimer();
     if (entry.totp?.secret) {
@@ -1299,58 +1356,92 @@ function wireSecretDetail(secret: DecryptedSecret) {
     });
 }
 
+function paintChipBar(opts: {
+  chips: { id: string; label: string; active: boolean }[];
+  allActive: boolean;
+  onSelect: (id: string | null) => void;
+}): void {
+  if (!opts.chips.length) {
+    filterBar.hidden = true;
+    filterBar.innerHTML = "";
+    return;
+  }
+  filterBar.hidden = false;
+  filterBar.innerHTML = `<div class="chip-row" role="listbox" aria-label="Filter">${[
+    `<button type="button" class="me-chip-btn${opts.allActive ? " active" : ""}" data-id="" aria-pressed="${opts.allActive}">All</button>`,
+    ...opts.chips.map(
+      (c) =>
+        `<button type="button" class="me-chip-btn${c.active ? " active" : ""}" data-id="${escapeHtml(c.id)}" aria-pressed="${c.active}">${escapeHtml(c.label)}</button>`,
+    ),
+  ].join("")}</div>`;
+  filterBar.querySelectorAll<HTMLButtonElement>("[data-id]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      opts.onSelect(btn.dataset.id || null);
+    });
+  });
+}
+
+function appendSectionLabel(title: string): void {
+  const li = document.createElement("li");
+  li.className = "section-label";
+  li.textContent = title;
+  listEl.appendChild(li);
+}
+
+function openFolder(folder: DecryptedCollection): void {
+  folderStack = searching
+    ? folderStackTo(collections, folder.uuid)
+    : [...folderStack, folder];
+  currentFolderUuid = folder.uuid;
+  if (searching) setSearching(false);
+  else {
+    updatePageChrome();
+    render();
+  }
+}
+
 function renderVault(q: string) {
   listEl.hidden = false;
+  const isSearch = !!q;
 
   const allTags = Array.from(
     new Set(logins.flatMap((e) => e.tags ?? []).filter(Boolean)),
   ).sort((a, b) => a.localeCompare(b));
-  if (allTags.length && !q) {
-    const bar = document.createElement("li");
-    bar.className = "pos-alone";
-    bar.style.listStyle = "none";
-    bar.innerHTML = `<div class="chip-row tag-filter">${[
-      `<button type="button" class="me-chip-btn${!activeTag ? " active" : ""}" data-tag="">All</button>`,
-      ...allTags.map(
-        (t) =>
-          `<button type="button" class="me-chip-btn${activeTag === t ? " active" : ""}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`,
-      ),
-    ].join("")}</div>`;
-    bar.querySelectorAll<HTMLButtonElement>("[data-tag]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        activeTag = btn.dataset.tag || null;
+  if (allTags.length && !isSearch) {
+    paintChipBar({
+      chips: allTags.map((t) => ({
+        id: t,
+        label: t,
+        active: filterTags.includes(t),
+      })),
+      allActive: filterTags.length === 0,
+      onSelect: (id) => {
+        if (!id) filterTags = [];
+        else if (filterTags.includes(id)) {
+          filterTags = filterTags.filter((t) => t !== id);
+        } else {
+          filterTags = [...filterTags, id];
+        }
         render();
-      });
+      },
     });
-    listEl.appendChild(bar);
   }
 
+  const folders = (
+    isSearch
+      ? collections.filter((c) => folderMatchesQuery(c, q))
+      : childFolders(collections, currentFolderUuid)
+  ).sort((a, b) => {
+    if (sortMode === "recent") return b.sortOrder - a.sortOrder;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
 
-  const folders = collections.filter((c) => c.parentUuid === currentFolderUuid);
-  const folderMatches = q
-    ? folders.filter((c) => c.name.toLowerCase().includes(q))
-    : folders;
-
-  const items = logins
-    .filter((e) => {
-      const inFolder =
-        (e.collectionUuid ?? null) === currentFolderUuid ||
-        (currentFolderUuid === null &&
-          (e.collectionUuid == null ||
-            !collections.some((c) => c.uuid === e.collectionUuid)));
-      if (!inFolder && !q) return false;
-      if (activeTag && !(e.tags ?? []).includes(activeTag) && !q) return false;
-      if (q) {
-        return (
-          e.title.toLowerCase().includes(q) ||
-          fillUsername(e).toLowerCase().includes(q) ||
-          e.urls.some((u) => u.toLowerCase().includes(q)) ||
-          (e.tags ?? []).some((t) => t.toLowerCase().includes(q))
-        );
-      }
-      return inFolder;
-    })
+  const items = entriesInFolder(logins, currentFolderUuid, {
+    searching: isSearch,
+    collections,
+  })
+    .filter((e) => entryMatchesTags(e, filterTags))
+    .filter((e) => (isSearch ? entryMatchesQuery(e, q) : true))
     .sort((a, b) => {
       if (sortMode === "recent") return b.revision - a.revision;
       return (a.title || "").localeCompare(b.title || "", undefined, {
@@ -1358,73 +1449,45 @@ function renderVault(q: string) {
       });
     });
 
-  // When searching, show matching logins across vault + matching folders.
-  const showFolders = !q || folderMatches.length > 0;
-  const visibleFolders = q ? folderMatches : folders;
-
-  if (!visibleFolders.length && !items.length) {
+  const filtered = filterTags.length > 0 && !isSearch;
+  if (!folders.length && !items.length) {
+    const inFolder = !!currentFolderUuid;
     listEl.innerHTML = emptyState(
       ICONS.lock,
-      q ? "No matches" : "No passwords yet",
-      vaultEmptyMessage({
-        tab: "vault",
-        searching: !!q,
-        filtered: false,
-        native: sessionMode === "native",
-      }),
+      isSearch || filtered
+        ? "No matches"
+        : inFolder
+          ? "Empty folder"
+          : "No passwords yet",
+      inFolder && !isSearch && !filtered
+        ? "Add a password to this folder, or tap +."
+        : vaultEmptyMessage({
+            tab: "vault",
+            searching: isSearch,
+            filtered,
+            native: sessionMode === "native",
+          }),
     );
     return;
   }
 
-  if (folderStack.length && !q) {
-    const crumb = document.createElement("li");
-    crumb.className = "pos-alone";
-    crumb.style.listStyle = "none";
-    crumb.innerHTML = `<div class="breadcrumb">
-      <button type="button" data-crumb="root">Vault</button>
-      ${folderStack
-        .map(
-          (f, i) =>
-            `<span>/</span><button type="button" data-crumb="${i}">${escapeHtml(f.name)}</button>`,
-        )
-        .join("")}
-    </div>`;
-    crumb.querySelectorAll<HTMLButtonElement>("[data-crumb]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        const v = btn.dataset.crumb;
-        if (v === "root") {
-          folderStack = [];
-          currentFolderUuid = null;
-        } else {
-          const idx = Number(v);
-          folderStack = folderStack.slice(0, idx + 1);
-          currentFolderUuid = folderStack[folderStack.length - 1]?.uuid ?? null;
-        }
-        updatePageChrome();
-        render();
-      });
-    });
-    listEl.appendChild(crumb);
-  }
-
-  if (showFolders) {
-    visibleFolders.forEach((folder) => {
+  if (folders.length) {
+    appendSectionLabel("Folders");
+    folders.forEach((folder, index) => {
+      const count = countEntriesInFolder(logins, folder.uuid);
       const li = document.createElement("li");
-      li.className = "folder-row pos-alone";
+      li.className = `folder-row ${positionClass(index, folders.length)}`;
       li.innerHTML = `
-        <div class="item-icon">${ICONS.lock}</div>
+        ${entryIconHtml(
+          { icon: folder.icon, title: folder.name },
+          { className: "item-icon", fallback: "folder" },
+        )}
         <div class="item-body">
           <div class="item-title">${escapeHtml(folder.name)}</div>
-          <div class="item-sub">Folder</div>
+          <div class="item-sub">${escapeHtml(count ? entriesCountLabel(count) : "Folder")}</div>
         </div>
         <div class="item-trailing">${ICONS.chevron}</div>`;
-      li.addEventListener("click", () => {
-        folderStack = [...folderStack, folder];
-        currentFolderUuid = folder.uuid;
-        updatePageChrome();
-        render();
-      });
+      li.addEventListener("click", () => openFolder(folder));
       li.addEventListener("contextmenu", async (ev) => {
         ev.preventDefault();
         const choice = prompt(
@@ -1468,6 +1531,13 @@ function renderVault(q: string) {
     });
   }
 
+  if (!items.length) {
+    wireEntryIconImages(listEl);
+    return;
+  }
+
+  if (folders.length) appendSectionLabel("Passwords");
+
   items.forEach((e, index) => {
     const li = document.createElement("li");
     li.className = positionClass(index, items.length);
@@ -1482,7 +1552,7 @@ function renderVault(q: string) {
     }
     const subParts = [userLabel, ...badges].filter(Boolean);
     li.innerHTML = `
-      <div class="item-icon">${ICONS.key}</div>
+      ${entryIconHtml(e, { preferSiteArtwork: true })}
       <div class="item-body">
         <div class="item-title">${escapeHtml(e.title || "Untitled")}</div>
         <div class="item-sub">${escapeHtml(subParts.join(" · "))}</div>
@@ -1501,10 +1571,7 @@ function renderVault(q: string) {
     });
     li.addEventListener("contextmenu", async (ev) => {
       ev.preventDefault();
-      const names = [
-        "Vault root",
-        ...collections.map((c) => c.name),
-      ];
+      const names = ["Vault root", ...collections.map((c) => c.name)];
       const choice = prompt(
         `Move "${e.title || "Untitled"}" to folder:\n${names.map((n, i) => `${i}: ${n}`).join("\n")}`,
         "0",
@@ -1529,6 +1596,7 @@ function renderVault(q: string) {
     });
     listEl.appendChild(li);
   });
+  wireEntryIconImages(listEl);
 }
 
 function renderCards(q: string) {
@@ -1542,22 +1610,18 @@ function renderCards(q: string) {
     ),
   ).sort((a, b) => a.localeCompare(b));
   if (brands.length && !q) {
-    const bar = document.createElement("div");
-    bar.className = "chip-row tag-filter";
-    bar.innerHTML = [
-      `<button type="button" class="me-chip-btn${!activeCardBrand ? " active" : ""}" data-brand="">All</button>`,
-      ...brands.map(
-        (b) =>
-          `<button type="button" class="me-chip-btn${activeCardBrand === b ? " active" : ""}" data-brand="${escapeHtml(b)}">${escapeHtml(b)}</button>`,
-      ),
-    ].join("");
-    bar.querySelectorAll<HTMLButtonElement>("[data-brand]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        activeCardBrand = btn.dataset.brand || null;
+    paintChipBar({
+      chips: brands.map((b) => ({
+        id: b,
+        label: b,
+        active: activeCardBrand === b,
+      })),
+      allActive: !activeCardBrand,
+      onSelect: (id) => {
+        activeCardBrand = id;
         render();
-      });
+      },
     });
-    cardsGrid.appendChild(bar);
   }
 
   const items = cards
@@ -1573,6 +1637,7 @@ function renderCards(q: string) {
         !q ||
         c.name.toLowerCase().includes(q) ||
         c.holder.toLowerCase().includes(q) ||
+        (c.bank ?? "").toLowerCase().includes(q) ||
         c.number.includes(q) ||
         cardBrandLabel(c.brand, c.number).toLowerCase().includes(q)
       );
@@ -1630,24 +1695,18 @@ function renderCrypto(q: string) {
     new Set(wallets.map((w) => w.network).filter(Boolean)),
   ).sort((a, b) => a.localeCompare(b));
   if (networks.length && !q) {
-    const bar = document.createElement("li");
-    bar.className = "pos-alone";
-    bar.style.listStyle = "none";
-    bar.innerHTML = `<div class="chip-row tag-filter">${[
-      `<button type="button" class="me-chip-btn${!activeCryptoNetwork ? " active" : ""}" data-network="">All</button>`,
-      ...networks.map(
-        (n) =>
-          `<button type="button" class="me-chip-btn${activeCryptoNetwork === n ? " active" : ""}" data-network="${escapeHtml(n)}">${escapeHtml(n)}</button>`,
-      ),
-    ].join("")}</div>`;
-    bar.querySelectorAll<HTMLButtonElement>("[data-network]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        activeCryptoNetwork = btn.dataset.network || null;
+    paintChipBar({
+      chips: networks.map((n) => ({
+        id: n,
+        label: n,
+        active: activeCryptoNetwork === n,
+      })),
+      allActive: !activeCryptoNetwork,
+      onSelect: (id) => {
+        activeCryptoNetwork = id;
         render();
-      });
+      },
     });
-    listEl.appendChild(bar);
   }
 
   const items = wallets
@@ -1659,6 +1718,7 @@ function renderCrypto(q: string) {
         !q ||
         w.name.toLowerCase().includes(q) ||
         w.network.toLowerCase().includes(q) ||
+        (w.folder ?? "").toLowerCase().includes(q) ||
         w.address.toLowerCase().includes(q)
       );
     })
@@ -1707,24 +1767,18 @@ function renderSecrets(q: string) {
     new Set(secrets.map((s) => s.secretKind).filter(Boolean)),
   ).sort((a, b) => a.localeCompare(b));
   if (kinds.length && !q) {
-    const bar = document.createElement("li");
-    bar.className = "pos-alone";
-    bar.style.listStyle = "none";
-    bar.innerHTML = `<div class="chip-row tag-filter">${[
-      `<button type="button" class="me-chip-btn${!activeSecretKind ? " active" : ""}" data-kind="">All</button>`,
-      ...kinds.map(
-        (k) =>
-          `<button type="button" class="me-chip-btn${activeSecretKind === k ? " active" : ""}" data-kind="${escapeHtml(k)}">${escapeHtml(secretKindLabel(k))}</button>`,
-      ),
-    ].join("")}</div>`;
-    bar.querySelectorAll<HTMLButtonElement>("[data-kind]").forEach((btn) => {
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        activeSecretKind = btn.dataset.kind || null;
+    paintChipBar({
+      chips: kinds.map((k) => ({
+        id: k,
+        label: secretKindLabel(k),
+        active: activeSecretKind === k,
+      })),
+      allActive: !activeSecretKind,
+      onSelect: (id) => {
+        activeSecretKind = id;
         render();
-      });
+      },
     });
-    listEl.appendChild(bar);
   }
 
   const items = secrets
@@ -1737,6 +1791,7 @@ function renderSecrets(q: string) {
         s.name.toLowerCase().includes(q) ||
         s.host.toLowerCase().includes(q) ||
         s.username.toLowerCase().includes(q) ||
+        (s.device ?? "").toLowerCase().includes(q) ||
         secretKindLabel(s.secretKind).toLowerCase().includes(q) ||
         maskSecret(s.secret).toLowerCase().includes(q)
       );
@@ -1812,6 +1867,56 @@ function settingsRow(opts: {
   return btn;
 }
 
+function renderItemsHub() {
+  settingsPanel.hidden = false;
+  const intro = document.createElement("p");
+  intro.className = "hub-subtitle";
+  intro.textContent = "Cards, crypto wallets, and secrets.";
+  settingsPanel.appendChild(intro);
+
+  const group = document.createElement("div");
+  group.className = "settings-group";
+
+  const cardsRow = settingsRow({
+    title: "Cards",
+    subtitle: itemsCountLabel(
+      cards.length,
+      "Payment cards and billing details",
+    ),
+    icon: ICONS.card,
+    iconClass: "primary",
+    position: "pos-start",
+  });
+  cardsRow.addEventListener("click", () => setItemsSection("cards"));
+
+  const cryptoRow = settingsRow({
+    title: "Crypto",
+    subtitle: itemsCountLabel(
+      wallets.length,
+      "Addresses, keys, and seed phrases",
+    ),
+    icon: ICONS.crypto,
+    iconClass: "tertiary",
+    position: "pos-center",
+  });
+  cryptoRow.addEventListener("click", () => setItemsSection("crypto"));
+
+  const secretsRow = settingsRow({
+    title: "Secrets",
+    subtitle: itemsCountLabel(
+      secrets.length,
+      "SSH keys, API tokens, and .env snippets",
+    ),
+    icon: ICONS.terminal,
+    iconClass: "secondary",
+    position: "pos-end",
+  });
+  secretsRow.addEventListener("click", () => setItemsSection("secrets"));
+
+  group.append(cardsRow, cryptoRow, secretsRow);
+  settingsPanel.appendChild(group);
+}
+
 function renderSettings() {
   settingsPanel.hidden = false;
   const localeMeta = LOCALES.find((l) => l.code === locale);
@@ -1838,7 +1943,7 @@ function renderSettings() {
     const banner = document.createElement("div");
     banner.className = "me-banner";
     banner.textContent =
-      "Sync, shares, organizations, and some edits run in the desktop app while connected this way.";
+      "Sync, shares, organizations, and vault folders run in the desktop app while connected this way.";
     settingsPanel.append(group1, banner);
   } else {
     settingsPanel.appendChild(group1);
@@ -2909,6 +3014,7 @@ async function saveEditor() {
                 : []),
             ],
             totp: totpSecret ? { secret: totpSecret } : null,
+            icon: current.draft.icon,
           },
         }),
       );
@@ -2927,6 +3033,7 @@ async function saveEditor() {
             expiry: val("edExpiry"),
             cvc: val("edCvc"),
             brand: val("edBrand") || undefined,
+            bank: val("edBank") || undefined,
             notes: val("edNotes") || undefined,
           },
         }),
@@ -2945,6 +3052,7 @@ async function saveEditor() {
             address: val("edAddress"),
             privateKey: val("edPrivateKey") || undefined,
             seedPhrase: val("edSeed") || undefined,
+            folder: val("edWalletFolder") || undefined,
             notes: val("edNotes") || undefined,
           },
         }),
@@ -2965,6 +3073,7 @@ async function saveEditor() {
             publicKey: val("edPublicKey"),
             secret: val("edSecret"),
             passphrase: val("edPassphrase"),
+            device: val("edDevice"),
             notes: val("edNotes"),
           },
         }),
@@ -3058,18 +3167,22 @@ async function refresh() {
     listEl.innerHTML = skeletonList();
   }
 
-  const [loginRes, cardRes, cryptoRes, secretRes, colRes] = await Promise.all([
-    send<{ entries: DecryptedEntry[] }>({ type: "LIST_ENTRIES" }),
-    send<{ cards: DecryptedCard[] }>({ type: "LIST_CARDS" }),
-    send<{ wallets: DecryptedCrypto[] }>({ type: "LIST_CRYPTO" }),
-    send<{ secrets: DecryptedSecret[] }>({ type: "LIST_SECRETS" }),
-    send<{ collections: DecryptedCollection[] }>({ type: "LIST_COLLECTIONS" }),
-  ]);
-  logins = loginRes.entries ?? [];
-  cards = cardRes.cards ?? [];
-  wallets = cryptoRes.wallets ?? [];
-  secrets = secretRes.secrets ?? [];
-  collections = colRes.collections ?? [];
+  const vault = await send<{
+    entries?: DecryptedEntry[];
+    cards?: DecryptedCard[];
+    wallets?: DecryptedCrypto[];
+    secrets?: DecryptedSecret[];
+    collections?: DecryptedCollection[];
+    error?: string;
+  }>({ type: "LIST_VAULT" });
+  logins = vault.entries ?? [];
+  cards = vault.cards ?? [];
+  wallets = vault.wallets ?? [];
+  secrets = vault.secrets ?? [];
+  collections = vault.collections ?? [];
+  if (vault.error) {
+    showToast(vault.error, "error", 5000);
+  }
 
   if (sessionMode === "native") {
     shares = [];
@@ -3192,9 +3305,20 @@ document.getElementById("nativeBtn")!.addEventListener("click", async () => {
   if (!res.ok) {
     const id = chrome.runtime.id;
     const detail = res.error?.trim() || "Native host not reachable";
-    errorEl.textContent =
-      `${detail}\n\nExtension ID: ${id}\nOpenKey → Settings → Browser extension → paste ID → Connect. Keep vault unlocked, then retry.`;
-    showToast(detail, "error", 4000);
+    const hostMissing =
+      /not found|forbidden|access to the specified native messaging host/i.test(
+        detail,
+      );
+    errorEl.textContent = hostMissing
+      ? `Chrome cannot talk to OpenKey until this extension ID is saved in the app.\nCopy the ID below → OpenKey → Settings → Browser extension → Connect.\nKeep the vault unlocked, then retry.`
+      : `${detail}\nKeep the OpenKey desktop app unlocked and retry.`;
+    showToast(
+      hostMissing ? "Save this extension ID in OpenKey, then retry" : detail,
+      "error",
+      4000,
+    );
+    const idEl = document.getElementById("extIdValue");
+    if (idEl) idEl.textContent = id;
     return;
   }
   showToast("Connected to desktop app", "success");
@@ -3252,7 +3376,7 @@ fabBtn.addEventListener("click", () => {
       collectionUuid: currentFolderUuid,
       draft: { title: "", username: "", password: "", urls: [], notes: "" },
     });
-  } else if (tab === "cards") {
+  } else if (itemsSection === "cards") {
     openEditor({
       kind: "card",
       draft: {
@@ -3264,7 +3388,7 @@ fabBtn.addEventListener("click", () => {
         cvc: "",
       },
     });
-  } else if (tab === "crypto") {
+  } else if (itemsSection === "crypto") {
     openEditor({
       kind: "crypto",
       draft: {
@@ -3274,7 +3398,7 @@ fabBtn.addEventListener("click", () => {
         address: "",
       },
     });
-  } else if (tab === "secrets") {
+  } else if (itemsSection === "secrets") {
     openEditor({
       kind: "secret",
       draft: {
@@ -3337,7 +3461,18 @@ async function bootstrapLocked() {
   if (settings?.sortMode) sortMode = settings.sortMode;
   const hint = document.getElementById("extIdHint")!;
   const id = status.extensionId || chrome.runtime.id;
-  hint.innerHTML = `For desktop fill, paste this ID in OpenKey → Settings → Browser extension:<code>${id}</code>`;
+  hint.textContent =
+    "If Connect fails, paste this ID in OpenKey → Settings → Browser extension.";
+  const idEl = document.getElementById("extIdValue");
+  if (idEl) idEl.textContent = id;
+  document.getElementById("copyExtIdBtn")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(id);
+      showToast("Extension ID copied", "success");
+    } catch {
+      showToast("Could not copy ID", "error");
+    }
+  });
 }
 
 void (async () => {

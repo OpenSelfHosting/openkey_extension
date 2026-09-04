@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   asLoginFromNative,
+  isUnsupportedNativeType,
+  mapNativeCollections,
   matchSecretsForOrigin,
+  nativeErrorMessage,
   normalizeCard,
   normalizeCrypto,
   normalizeLogin,
@@ -116,14 +119,17 @@ describe("parseVaultItem", () => {
     const card = normalizeCard(row, { name: "N", number: "1" });
     expect(card.holder).toBe("");
     expect(card.type).toBe("card");
+    expect(card.bank).toBeUndefined();
 
     const crypto = normalizeCrypto(row, {
       name: "W",
       network: "other",
       address: "a",
+      folder: "Cold",
     });
     expect(crypto.privateKey).toBe("");
     expect(crypto.seedPhrase).toBe("");
+    expect(crypto.folder).toBe("Cold");
 
     const sec = normalizeSecret(row, {
       type: "secret",
@@ -224,5 +230,46 @@ describe("secretKindLabelFallback", () => {
     expect(secretKindLabelFallback("apiToken")).toBe("API token");
     expect(secretKindLabelFallback("envSnippet")).toBe(".env");
     expect(secretKindLabelFallback("other")).toBe("Secret");
+  });
+});
+
+describe("mapNativeCollections", () => {
+  it("drops reserved ids and normalizes empty parents", () => {
+    const folders = mapNativeCollections([
+      {
+        uuid: ReservedCollections.wallets,
+        name: "Wallets",
+        parentUuid: null,
+        sortOrder: 0,
+      },
+      {
+        uuid: "work",
+        name: "Work",
+        parentUuid: "",
+        icon: "material:folder",
+        sortOrder: 2,
+      },
+      {
+        uuid: "home",
+        name: "Home",
+        parentUuid: null,
+        sortOrder: 1,
+      },
+    ]);
+    expect(folders.map((c) => c.uuid)).toEqual(["home", "work"]);
+    expect(folders[0].parentUuid).toBeNull();
+    expect(folders[1].parentUuid).toBeNull();
+  });
+});
+
+describe("nativeErrorMessage", () => {
+  it("maps timeouts and oversized responses", () => {
+    expect(nativeErrorMessage("Native host timeout")).toMatch(/desktop app/);
+    expect(nativeErrorMessage("Vault response too large")).toMatch(/too large/);
+  });
+
+  it("treats Unknown type as an older desktop, not a vault crash", () => {
+    expect(isUnsupportedNativeType("Unknown type")).toBe(true);
+    expect(isUnsupportedNativeType("Native host timeout")).toBe(false);
   });
 });

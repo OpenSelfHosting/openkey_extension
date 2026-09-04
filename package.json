@@ -1,6 +1,6 @@
 {
   "name": "openkey-extension",
-  "version": "0.1.4",
+  "version": "0.1.18",
   "private": true,
   "type": "module",
   "scripts": {
@@ -25,7 +25,12 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.6",
-    "vite-plugin-web-extension": "^4.4.3",
+    "vite-plugin-web-extension": "^4.5.1",
     "vitest": "^3.0.5"
+  },
+  "overrides": {
+    "adm-zip": "0.6.0",
+    "shell-quote": "1.10.0",
+    "tmp": "0.2.7"
   }
 }

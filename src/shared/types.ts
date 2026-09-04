@@ -77,6 +77,8 @@ export type CryptoPayload = {
   privateKey?: string;
   seedPhrase?: string;
   notes?: string;
+  /** Logical folder used to group wallets (e.g. "Cold storage"). */
+  folder?: string;
 };
 
 /** Developer secret kinds — mirrors openkey_app SecretKind. */
@@ -197,6 +199,17 @@ export type SessionState = {
   kdfParams?: Record<string, unknown>;
   mode?: "standalone" | "native";
 };
+
+export const SESSION_STORAGE_KEY = "openkey_session";
+
+/** True when the vault can serve fills (native desktop or standalone with a key). */
+export function sessionLooksUnlocked(
+  session: SessionState | null | undefined,
+): boolean {
+  if (!session?.unlocked) return false;
+  if (session.mode === "native") return true;
+  return !!session.vaultKeyB64;
+}
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -418,15 +431,36 @@ export function maskSecret(value: string): string {
 }
 
 export function cardBrandLabel(brand?: string, number?: string): string {
-  const fromName = brand?.toLowerCase();
-  if (fromName === "visa") return "Visa";
-  if (fromName === "mastercard") return "Mastercard";
-  if (fromName === "amex") return "Amex";
-  if (fromName === "discover") return "Discover";
+  const fromName = brand?.toLowerCase().trim() ?? "";
+  const named: Record<string, string> = {
+    visa: "Visa",
+    mastercard: "Mastercard",
+    maestro: "Mastercard",
+    amex: "Amex",
+    "american express": "Amex",
+    americanexpress: "Amex",
+    discover: "Discover",
+    unionpay: "UnionPay",
+    "union pay": "UnionPay",
+    rupay: "RuPay",
+    "ru pay": "RuPay",
+    elo: "Elo",
+    hipercard: "Hipercard",
+    mir: "Mir",
+  };
+  if (fromName && named[fromName]) return named[fromName];
+
   const digits = (number ?? "").replace(/\D/g, "");
+  if (/^220[0-4]/.test(digits)) return "Mir";
+  if (digits.startsWith("606282")) return "Hipercard";
+  if (digits.startsWith("6521") || digits.startsWith("6522")) return "RuPay";
+  if (digits.startsWith("6011") || digits.startsWith("65")) return "Discover";
+  if (digits.startsWith("62")) return "UnionPay";
+  if (digits.startsWith("60")) return "RuPay";
   if (digits.startsWith("4")) return "Visa";
-  if (/^5[1-5]/.test(digits) || /^2(2[2-9]|[3-6]|7[01]|720)/.test(digits))
+  if (/^5[1-5]/.test(digits) || /^2(2[2-9]|[3-6]|7[01]|720)/.test(digits)) {
     return "Mastercard";
+  }
   if (/^3[47]/.test(digits)) return "Amex";
   if (digits.startsWith("6011") || digits.startsWith("65")) return "Discover";
   return "Card";

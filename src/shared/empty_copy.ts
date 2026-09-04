@@ -18,11 +18,11 @@ export function vaultEmptyMessage(input: {
       case "vault":
         return "Add logins in the OpenKey desktop app, or tap + to save one here.";
       case "cards":
-        return "Add cards in the OpenKey desktop app.";
+        return "Tap + to add a card (saved in the unlocked desktop app).";
       case "crypto":
-        return "Add wallets in the OpenKey desktop app.";
+        return "Tap + to add a wallet (saved in the unlocked desktop app).";
       case "secrets":
-        return "Add secrets in the OpenKey desktop app.";
+        return "Tap + to add a secret (saved in the unlocked desktop app).";
     }
   }
   switch (input.tab) {

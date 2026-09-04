@@ -31,6 +31,7 @@ import {
   rekey,
   syncPull,
 } from "../../sync/api";
+import { sessionLooksUnlocked } from "../../shared/types";
 import { clearIdentityCache, ensureIdentityKeys } from "../../sync/identity";
 import {
   getSession,
@@ -45,9 +46,7 @@ export async function lock(): Promise<void> {
 }
 
 export async function isUnlocked(): Promise<boolean> {
-  const s = await getSession();
-  if (s.mode === "native") return !!s.unlocked;
-  return !!s.unlocked && !!s.vaultKeyB64;
+  return sessionLooksUnlocked(await getSession());
 }
 
 

@@ -3,19 +3,15 @@
  */
 import { fromB64Url } from "../../crypto/crypto";
 import { getSettings } from "../../db/store";
-import type { SessionState } from "../../shared/types";
-
-const SESSION_KEY = "openkey_session";
+import {
+  SESSION_STORAGE_KEY,
+  sessionLooksUnlocked,
+  type SessionState,
+} from "../../shared/types";
 
 export async function getSession(): Promise<SessionState> {
-  const data = await chrome.storage.session.get(SESSION_KEY);
-  return (data[SESSION_KEY] as SessionState) ?? { unlocked: false };
-}
-
-function sessionLooksUnlocked(session: SessionState): boolean {
-  if (!session.unlocked) return false;
-  if (session.mode === "native") return true;
-  return !!session.vaultKeyB64;
+  const data = await chrome.storage.session.get(SESSION_STORAGE_KEY);
+  return (data[SESSION_STORAGE_KEY] as SessionState) ?? { unlocked: false };
 }
 
 async function updateActionBadge(session: SessionState): Promise<void> {
@@ -64,18 +60,43 @@ async function broadcastSession(session: SessionState): Promise<void> {
   await Promise.all(
     tabs.map(async (tab) => {
       if (tab.id == null) return;
-      try {
-        await chrome.tabs.sendMessage(tab.id, payload);
-      } catch {
-        /* no content script on this tab */
-      }
+      await sendSessionToTab(tab.id, payload);
     }),
   );
 }
 
+async function sendSessionToTab(
+  tabId: number,
+  payload: { type: string; unlocked: boolean; mode: string | null },
+): Promise<void> {
+  for (const delayMs of [0, 200, 500]) {
+    if (delayMs) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+    try {
+      await chrome.tabs.sendMessage(tabId, payload);
+      return;
+    } catch {
+      /* content script not ready yet — retry */
+    }
+  }
+}
+
 export async function setSession(session: SessionState): Promise<void> {
-  await chrome.storage.session.set({ [SESSION_KEY]: session });
+  await exposeSessionToPages();
+  await chrome.storage.session.set({ [SESSION_STORAGE_KEY]: session });
   void broadcastSession(session);
+}
+
+/** Let content scripts read session storage so unlock is visible without a reload. */
+export async function exposeSessionToPages(): Promise<void> {
+  try {
+    await chrome.storage.session.setAccessLevel({
+      accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS",
+    });
+  } catch {
+    /* Chrome < 123 or Firefox */
+  }
 }
 
 /** Refresh toolbar badge from the current session (SW restart / install). */

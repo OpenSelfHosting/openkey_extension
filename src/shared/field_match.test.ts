@@ -4,6 +4,7 @@ import {
   isAutofillIgnored,
   isLikelyTokenField,
   isLikelyUsernameField,
+  isNewPasswordField,
   selectPreferredIndex,
 } from "./field_match";
 
@@ -29,6 +30,17 @@ describe("isLikelyUsernameField", () => {
         hint: fieldHintText(["email_address", "Your email"]),
       }),
     ).toBe(true);
+  });
+});
+
+describe("isNewPasswordField", () => {
+  it("detects Android new-password hints", () => {
+    expect(isNewPasswordField({ autocomplete: "new-password" })).toBe(true);
+    expect(isNewPasswordField({ hint: "new_password" })).toBe(true);
+    expect(isNewPasswordField({ hint: "newpassword" })).toBe(true);
+    expect(isNewPasswordField({ autocomplete: "current-password" })).toBe(
+      false,
+    );
   });
 });
 

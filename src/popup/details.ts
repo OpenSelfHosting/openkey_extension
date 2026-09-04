@@ -13,6 +13,7 @@ import {
   secretKindLabel,
 } from "../shared/types";
 import { generateTotp } from "../shared/totp";
+import { entryIconHtml } from "../shared/entry_icon";
 
 export type DetailKind = "login" | "card" | "crypto" | "secret";
 
@@ -211,7 +212,7 @@ export function buildLoginDetailHtml(
   return `
     <div class="detail-page">
       <div class="detail-hero">
-        <div class="detail-avatar primary cookie">${icons.keyLg ?? icons.key}</div>
+        ${entryIconHtml(entry, { className: "detail-avatar primary cookie", size: 44, preferSiteArtwork: true })}
         <h3 class="detail-name">${esc(title)}</h3>
         ${username ? `<p class="detail-sub">${esc(username)}</p>` : ""}
         <div class="detail-actions">
@@ -328,7 +329,7 @@ export function buildCardDetailHtml(
       value: esc(card.cvc || "—"),
       icon: icons.password,
       iconClass: "danger",
-      position: card.notes ? "pos-center" : "pos-end",
+      position: card.bank || card.notes ? "pos-center" : "pos-end",
       mono: true,
       dataCopy: card.cvc ? "cvc" : undefined,
       trailingHtml: card.cvc
@@ -336,6 +337,18 @@ export function buildCardDetailHtml(
         : "",
     }),
   ];
+  if (card.bank) {
+    rows.push(
+      fieldRow({
+        title: "Bank",
+        value: esc(card.bank),
+        icon: icons.folder ?? icons.label,
+        iconClass: "tertiary",
+        position: card.notes ? "pos-center" : "pos-end",
+        dataCopy: "bank",
+      }),
+    );
+  }
   if (card.notes) {
     rows.push(
       fieldRow({
@@ -447,7 +460,7 @@ export function buildCryptoDetailHtml(
         : "—",
       icon: icons.spa,
       iconClass: "tertiary",
-      position: wallet.notes ? "pos-center" : "pos-end",
+      position: wallet.folder || wallet.notes ? "pos-center" : "pos-end",
       mono: true,
       multiline: true,
       dataCopy: seed ? "seed" : undefined,
@@ -457,6 +470,18 @@ export function buildCryptoDetailHtml(
         : "",
     }),
   ];
+  if (wallet.folder) {
+    rows.push(
+      fieldRow({
+        title: "Folder",
+        value: esc(wallet.folder),
+        icon: icons.folder ?? icons.label,
+        iconClass: "tertiary",
+        position: wallet.notes ? "pos-center" : "pos-end",
+        dataCopy: "folder",
+      }),
+    );
+  }
   if (wallet.notes) {
     rows.push(
       fieldRow({
@@ -510,6 +535,18 @@ export function buildSecretDetailHtml(
   const isSsh = secret.secretKind === "sshKey";
 
   const rows: string[] = [];
+  if (secret.device) {
+    rows.push(
+      fieldRow({
+        title: "Device",
+        value: esc(secret.device),
+        icon: icons.devices ?? icons.label,
+        iconClass: "tertiary",
+        position: "pos-start",
+        dataCopy: "device",
+      }),
+    );
+  }
   if (secret.host) {
     rows.push(
       fieldRow({
