@@ -37,6 +37,23 @@ What that enables (and does not):
 
 Store reviewers: justify `<all_urls>` as required for universal autofill + WebAuthn interception; optional site-specific host permissions would break first-visit save/fill.
 
+## Content security policy (`wasm-unsafe-eval`)
+
+The manifest sets `content_security_policy.extension_pages` to
+`script-src 'self' 'wasm-unsafe-eval'; object-src 'self'`.
+
+Argon2id runs through `hash-wasm`, which compiles a WebAssembly module, and the
+service worker is the only place the master key is ever derived. MV3's default
+extension CSP is `script-src 'self'`, which makes `WebAssembly.compile` throw —
+so registration and every unlock/login fail in a real browser even though the
+Node test suite passes (Node has no extension CSP). `'wasm-unsafe-eval'` is the
+narrow carve-out for this: it permits WASM compilation only, **not** `eval()`.
+`script-src` stays otherwise pinned to `'self'` — no remote origins, no
+`'unsafe-inline'`.
+
+`src/manifest_csp.test.ts` locks this in, and asserts the build copies the CSP
+into `dist/manifest.json`. Keep it green; without it the extension cannot unlock.
+
 ### Passkeys smoke test
 
 ```bash
