@@ -432,6 +432,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({
             ok: true,
             filename: file.filename,
+            contentType: file.contentType,
             bytesB64: btoa(binary),
           });
           break;

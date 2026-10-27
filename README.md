@@ -10,8 +10,10 @@ MV3 extension with:
 4. **Save / update** — capture new logins from the page and store them in the vault
 5. **Passkeys** — intercepts WebAuthn `create` / `get` on sites, stores ES256 credentials in the vault (extension unlocked)
 6. **Cards, crypto & secrets** — browse payment cards, crypto wallets, and developer secrets (API tokens, SSH keys, `.env`); fill card forms and token fields; copy wallet address / secrets
-7. **Attachments** — list and download decrypted attachments for a login (standalone mode)
+7. **Attachments** — list and download decrypted attachments for a login (standalone mode). Downloads use stored or filename-guessed MIME `content_type`. Add / preview attachments in the desktop or mobile app. Nearby vault clone and LAN pairing are app-only.
 8. **Shares & orgs** — list/accept/revoke shares, list organizations and shared collections, accept invites (standalone mode)
+
+First-run vault setup (create / sign in / Nearby copy / restore `.okbak`) happens in the OpenKey app, not this extension.
 
 ## Develop
 
@@ -139,5 +141,5 @@ Dev builds without the packaged host binary also install the Python host via **S
 3. Or **Unlock** — `POST /auth/prelogin` then login for an existing account.
 4. Or **Use desktop app** — after connecting via the desktop **Settings → Browser extension**.
 
-Paste from the app (**Settings → Browser extension → Copy offline vault link**) is optional (offline/air-gapped bootstrap). After a successful login, unlock material is cached locally; nested folders sync via collection `parent_uuid`. Decrypted entry payloads include `tags`, `fields`, `fieldOrder`, and `icon` to match the app. Cards (`type: card`), crypto wallets (`type: crypto`), and developer secrets (`type: secret`) use reserved collections `__wallets__` / `__crypto_wallets__` / `__dev_secrets__`. Attachments sync via `/sync` blobs or `GET /attachments/{uuid}/content`.
+Paste from the app (**Settings → Browser extension → Copy offline vault link**) is optional (offline/air-gapped bootstrap). After a successful login, unlock material is cached locally; nested folders sync via collection `parent_uuid`. Decrypted entry payloads include `tags`, `fields`, `fieldOrder`, and `icon` to match the app. Cards (`type: card`), crypto wallets (`type: crypto`), and developer secrets (`type: secret`) use reserved collections `__wallets__` / `__crypto_wallets__` / `__dev_secrets__`. Attachments sync via `/sync` blobs or `GET /attachments/{uuid}/content` (optional server `content_type` metadata). Nearby LAN vault clone does not go through the extension.
 # openkey_extension

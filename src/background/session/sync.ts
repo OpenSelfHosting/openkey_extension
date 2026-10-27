@@ -26,6 +26,7 @@ import {
   syncPushLocal,
 } from "../../sync/api";
 import type { EntryPayload, StoredAttachment } from "../../shared/types";
+import { resolveAttachmentContentType } from "../../shared/attachment_mime";
 import { isUnlocked } from "./auth";
 import { decryptLocalEntries } from "./vault_read";
 import { getSession, vaultKeyFromSession } from "./state";
@@ -126,7 +127,7 @@ export async function listEntryAttachments(entryUuid: string): Promise<
 export async function downloadAttachment(input: {
   entryUuid: string;
   attachmentId: string;
-}): Promise<{ filename: string; bytes: Uint8Array }> {
+}): Promise<{ filename: string; bytes: Uint8Array; contentType: string }> {
   if (!(await isUnlocked())) throw new Error("Vault locked");
   const session = await getSession();
   if (session.mode === "native") {
@@ -137,6 +138,7 @@ export async function downloadAttachment(input: {
 
   let cipher: string | undefined;
   let filename = "attachment";
+  let contentType: string | null = null;
 
   const row = await getStoredEntry(input.entryUuid);
   if (row) {
@@ -157,6 +159,7 @@ export async function downloadAttachment(input: {
   const stored = await getStoredAttachment(input.attachmentId);
   if (stored) {
     filename = stored.filename || filename;
+    contentType = stored.contentType;
     if (!cipher && stored.encryptedBlob) cipher = stored.encryptedBlob;
   }
 
@@ -168,7 +171,7 @@ export async function downloadAttachment(input: {
       entryUuid: input.entryUuid,
       filename,
       sizeBytes: blob.length,
-      contentType: null,
+      contentType,
       revision: stored?.revision ?? 1,
       isDeleted: false,
       encryptedBlob: cipher,
@@ -179,6 +182,10 @@ export async function downloadAttachment(input: {
 
   if (!cipher) throw new Error("Attachment ciphertext missing");
   const clear = decryptBytes(key, cipher);
-  return { filename, bytes: clear };
+  return {
+    filename,
+    bytes: clear,
+    contentType: resolveAttachmentContentType(contentType, filename),
+  };
 }
 

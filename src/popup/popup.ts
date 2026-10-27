@@ -1029,6 +1029,7 @@ function wireLoginDetail(
         const res = await send<{
           ok?: boolean;
           filename?: string;
+          contentType?: string;
           bytesB64?: string;
           error?: string;
         }>({
@@ -1041,14 +1042,17 @@ function wireLoginDetail(
           return;
         }
         const bin = Uint8Array.from(atob(res.bytesB64), (c) => c.charCodeAt(0));
-        const blob = new Blob([bin]);
+        const name = res.filename || f?.name || "file";
+        const blob = new Blob([bin], {
+          type: res.contentType || "application/octet-stream",
+        });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = res.filename || f?.name || "file";
+        a.download = name;
         a.click();
         URL.revokeObjectURL(url);
-        showToast(`Saved ${res.filename || f?.name || "file"}`, "success");
+        showToast(`Saved ${name}`, "success");
       });
     });
 
