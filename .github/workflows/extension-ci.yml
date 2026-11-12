@@ -35,11 +35,11 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
-      - name: Run tests
-        run: npm test
-
       - name: Build extension
         run: npm run build
 
       - name: Verify built manifest
         run: test -s dist/manifest.json
+
+      - name: Run tests
+        run: npm test
