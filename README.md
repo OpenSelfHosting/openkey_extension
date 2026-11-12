@@ -2,6 +2,10 @@
 
 Open-source MV3 extension for Chrome and Firefox. It implements the same vault protocol as the official app ([spec](https://github.com/OpenSelfHosting/OpenKey/tree/main/spec)). Download the **official desktop/mobile app** from [OpenKey Releases](https://github.com/OpenSelfHosting/OpenKey/releases) — app source is not public.
 
+<p align="center">
+  <a href="https://chromewebstore.google.com/detail/cmebbcnocamcolnedgafbkeelejldoga?utm_source=item-share-cp"><img src="../OpenKey/docs/assets/chrome-web-store-download.svg" width="220" height="64" alt="Get OpenKey from the Chrome Web Store"></a>
+</p>
+
 MV3 extension with:
 
 1. **Standalone vault** — unlock with master password, sync ciphertext from your self-hosted OpenKey server

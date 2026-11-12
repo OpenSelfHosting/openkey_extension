@@ -48,8 +48,8 @@ zip -r ../openkey-extension-chrome.zip .
 3. لقطات 1280×800 أو 640×400 — واحدة على الأقل، ويفضّل 3–5.
 4. **Privacy policy:** https://openselfhosting.com/privacy
 5. **Homepage:** https://openselfhosting.com
-6. تبرير كل permission في Privacy practices:
-   `tabs`، `storage`، `downloads`، `nativeMessaging`، `clipboardRead`، `scripting`، `<all_urls>`.
+6. في Privacy practices، برّر الصلاحيات الظاهرة في `manifest.json`:
+   `storage`، `activeTab`، `contextMenus`، `nativeMessaging`، `alarms`، `clipboardRead`، `clipboardWrite`، `notifications`، و`<all_urls>`.
 7. **Remote code:** ممنوع. لا CDN لسكربتات. كل المنطق داخل الحزمة.
 8. إن كان هناك native messaging: اشرح أن المضيف هو تطبيق سطح المكتب الرسمي على جهاز المستخدم.
 

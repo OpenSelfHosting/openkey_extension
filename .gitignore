@@ -3,3 +3,8 @@ dist
 .DS_Store
 ._*
 *.log
+
+openkey-extension-chrome.zip
+package-lock.json
+
+store/
